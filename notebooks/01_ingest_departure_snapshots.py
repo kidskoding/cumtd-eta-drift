@@ -1,20 +1,22 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "1"
+# ///
 # MAGIC %md
 # MAGIC # 01 - Ingest CUMTD Departure Snapshots
 # MAGIC
-# MAGIC Poll the CUMTD stops departures endpoint for one or more stops and append a flattened, typed snapshot to Delta.
+# MAGIC Read JSON snapshots deposited by the AWS Lambda fetcher in S3, flatten them, and append to Delta.
 
 # COMMAND ----------
 
 from datetime import datetime, timezone
 import json
-import time
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import uuid4
 
-import requests
 from pyspark.sql import Row
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, input_file_name
 from pyspark.sql.types import (
     BooleanType,
     DoubleType,
@@ -31,29 +33,17 @@ from pyspark.sql.types import (
 
 dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("schema", "cumtd_eta_drift")
-dbutils.widgets.text("api_base_url", "https://developer.mtd.org/api")
-dbutils.widgets.text("api_version", "v3")
-dbutils.widgets.text("departures_endpoint_path", "json/getdeparturesbystop")
-dbutils.widgets.text("stop_ids", "it")
+dbutils.widgets.text("s3_bucket", "cumtd-eta-drift")
+dbutils.widgets.text("s3_prefix", "raw-departures")
+dbutils.widgets.text("stop_ids", "IT")
 dbutils.widgets.text("lookahead_minutes", "60")
-dbutils.widgets.text("request_timeout_seconds", "30")
-dbutils.widgets.text("max_retries", "3")
-dbutils.widgets.text("api_key_scope", "")
-dbutils.widgets.text("api_key_name", "")
-dbutils.widgets.text("api_key_param", "key")
 
 catalog = dbutils.widgets.get("catalog").strip()
 schema_name = dbutils.widgets.get("schema").strip()
-api_base_url = dbutils.widgets.get("api_base_url").strip().rstrip("/")
-api_version = dbutils.widgets.get("api_version").strip().strip("/")
-departures_endpoint_path = dbutils.widgets.get("departures_endpoint_path").strip().strip("/")
+s3_bucket = dbutils.widgets.get("s3_bucket").strip()
+s3_prefix = dbutils.widgets.get("s3_prefix").strip().strip("/")
 stop_ids = [s.strip() for s in dbutils.widgets.get("stop_ids").split(",") if s.strip()]
 lookahead_minutes = int(dbutils.widgets.get("lookahead_minutes"))
-request_timeout_seconds = int(dbutils.widgets.get("request_timeout_seconds"))
-max_retries = int(dbutils.widgets.get("max_retries"))
-api_key_scope = dbutils.widgets.get("api_key_scope").strip()
-api_key_name = dbutils.widgets.get("api_key_name").strip()
-api_key_param = dbutils.widgets.get("api_key_param").strip() or "key"
 
 if not stop_ids:
     raise ValueError("Provide at least one stop_id in the stop_ids widget.")
@@ -61,12 +51,10 @@ if not stop_ids:
 database_name = f"{catalog}.{schema_name}" if catalog else schema_name
 raw_table = f"{database_name}.raw_departure_snapshots"
 audit_table = f"{database_name}.departure_ingestion_audit"
+s3_path = f"s3://{s3_bucket}/{s3_prefix}"
 
-
-class DepartureFetchError(RuntimeError):
-    def __init__(self, message: str, status_code: Optional[int] = None):
-        super().__init__(message)
-        self.status_code = status_code
+print(f"Reading snapshots from: {s3_path}")
+print(f"Writing to: {raw_table}")
 
 # COMMAND ----------
 
@@ -184,58 +172,6 @@ def _nested(payload: Dict[str, Any], *path: str) -> Any:
 
 # COMMAND ----------
 
-def build_departures_url(stop_id: str) -> str:
-    # Keep this single function isolated so the exact v3 path can be changed without touching parsing or writes.
-    return f"{api_base_url}/{api_version}/{departures_endpoint_path}"
-
-
-def build_query_params(stop_id: str) -> Dict[str, Any]:
-    params: Dict[str, Any] = {
-        "stop_id": stop_id,
-        "pt": lookahead_minutes,
-    }
-
-    if api_key_scope and api_key_name:
-        params[api_key_param] = dbutils.secrets.get(scope=api_key_scope, key=api_key_name)
-
-    return params
-
-
-def fetch_departures(stop_id: str) -> tuple[Dict[str, Any], Optional[int]]:
-    last_error: Optional[Exception] = None
-    last_status_code: Optional[int] = None
-    url = build_departures_url(stop_id)
-    params = build_query_params(stop_id)
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            response = requests.get(url, params=params, timeout=request_timeout_seconds)
-            last_status_code = response.status_code
-            response.raise_for_status()
-            return response.json(), response.status_code
-        except requests.RequestException as exc:
-            last_error = exc
-            if attempt == max_retries:
-                break
-            time.sleep(min(2 ** (attempt - 1), 10))
-
-    raise DepartureFetchError(
-        f"Failed to fetch departures for stop_id={stop_id} after {max_retries} attempts",
-        status_code=last_status_code,
-    ) from last_error
-
-
-def iter_departures(payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
-    departures = payload.get("departures")
-    if departures is None:
-        departures = _nested(payload, "data", "departures")
-    if departures is None:
-        departures = _nested(payload, "result", "departures")
-    if departures is None:
-        return []
-    return departures
-
-
 def flatten_departure(
     run_id: str,
     source_stop_id: str,
@@ -243,6 +179,7 @@ def flatten_departure(
     departure: Dict[str, Any],
     ingestion_ts: datetime,
 ) -> Row:
+    """Convert a single departure dict into a typed Row."""
     stop = departure.get("stop") or payload.get("stop") or {}
     route = departure.get("route") or {}
     trip = departure.get("trip") or {}
@@ -271,6 +208,45 @@ def flatten_departure(
         raw_departure_json=json.dumps(departure, sort_keys=True),
     )
 
+
+def iter_departures(payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+    """Extract departures list from various API response shapes."""
+    departures = payload.get("departures")
+    if departures is None:
+        departures = _nested(payload, "data", "departures")
+    if departures is None:
+        departures = _nested(payload, "result", "departures")
+    if departures is None:
+        return []
+    return departures
+
+
+def read_s3_snapshots(s3_base: str) -> List[Dict[str, Any]]:
+    """Read all JSON snapshot files from S3 and return parsed envelopes."""
+    try:
+        raw_df = spark.read.option("multiLine", True).json(f"{s3_base}/*/**.json")
+        if raw_df.rdd.isEmpty():
+            return []
+        return [json.loads(row.asDict(recursive=True).__str__().replace("'", '"'))
+                for row in raw_df.collect()]
+    except Exception:
+        return []
+
+
+def read_s3_snapshots_raw(s3_base: str) -> List[Dict[str, Any]]:
+    """Read JSON files from S3 using wholeTextFiles for reliable parsing."""
+    envelopes = []
+    try:
+        rdd = spark.sparkContext.wholeTextFiles(f"{s3_base}/*/**.json")
+        for path, content in rdd.collect():
+            try:
+                envelopes.append(json.loads(content))
+            except json.JSONDecodeError:
+                continue
+    except Exception:
+        pass
+    return envelopes
+
 # COMMAND ----------
 
 run_id = str(uuid4())
@@ -278,14 +254,21 @@ ingestion_ts = datetime.now(timezone.utc)
 rows: List[Row] = []
 audit_rows: List[Row] = []
 
-for stop_id in stop_ids:
-    started_at = time.monotonic()
-    request_url = build_departures_url(stop_id)
+# ---- Read JSON snapshots deposited by Lambda into S3 ----
+print(f"Scanning {s3_path} for new snapshots...")
+envelopes = read_s3_snapshots_raw(s3_path)
+print(f"Found {len(envelopes)} snapshot file(s) in S3")
+
+for envelope in envelopes:
+    stop_id = envelope.get("stop_id", "unknown")
+    fetch_ts_str = envelope.get("fetch_timestamp")
+    fetch_ts = _parse_timestamp(fetch_ts_str) if fetch_ts_str else ingestion_ts
+    payload = envelope.get("api_response", {})
+
     try:
-        payload, http_status_code = fetch_departures(stop_id)
         stop_rows = [
-            flatten_departure(run_id, stop_id, payload, departure, ingestion_ts)
-            for departure in iter_departures(payload)
+            flatten_departure(run_id, stop_id, payload, dep, fetch_ts)
+            for dep in iter_departures(payload)
         ]
         rows.extend(stop_rows)
         audit_rows.append(
@@ -294,27 +277,26 @@ for stop_id in stop_ids:
                 ingestion_timestamp=ingestion_ts,
                 ingestion_date=ingestion_ts.date(),
                 source_stop_id=stop_id,
-                request_url=request_url,
+                request_url=f"{s3_path}/{stop_id}",
                 status="success",
-                http_status_code=http_status_code,
+                http_status_code=None,
                 rows_extracted=len(stop_rows),
-                duration_seconds=float(time.monotonic() - started_at),
+                duration_seconds=None,
                 error_message=None,
             )
         )
     except Exception as exc:
-        http_status_code = exc.status_code if isinstance(exc, DepartureFetchError) else None
         audit_rows.append(
             Row(
                 run_id=run_id,
                 ingestion_timestamp=ingestion_ts,
                 ingestion_date=ingestion_ts.date(),
                 source_stop_id=stop_id,
-                request_url=request_url,
+                request_url=f"{s3_path}/{stop_id}",
                 status="failed",
-                http_status_code=http_status_code,
+                http_status_code=None,
                 rows_extracted=0,
-                duration_seconds=float(time.monotonic() - started_at),
+                duration_seconds=None,
                 error_message=str(exc),
             )
         )
@@ -324,8 +306,12 @@ if rows:
 else:
     snapshot_df = spark.createDataFrame([], raw_schema)
 
-audit_df = spark.createDataFrame(audit_rows, audit_schema)
+if audit_rows:
+    audit_df = spark.createDataFrame(audit_rows, audit_schema)
+else:
+    audit_df = spark.createDataFrame([], audit_schema)
 
+print(f"Parsed {len(rows)} departure rows from {len(envelopes)} files")
 display(snapshot_df.orderBy(col("source_stop_id"), col("estimatedDeparture")))
 display(audit_df.orderBy(col("source_stop_id")))
 
