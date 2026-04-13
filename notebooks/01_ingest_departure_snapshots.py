@@ -195,10 +195,10 @@ def flatten_departure(
         source_stop_id=source_stop_id,
         stop_id=_first_present(departure, ["stop_id", "stopId"]) or _first_present(stop, ["stop_id", "id"]),
         stop_name=_first_present(departure, ["stop_name", "stopName"]) or _first_present(stop, ["stop_name", "name"]),
-        trip_id=_first_present(departure, ["trip_id", "tripId"]) or _first_present(trip, ["trip_id", "id"]),
-        route_id=_first_present(departure, ["route_id", "routeId"]) or _first_present(route, ["route_id", "id"]),
+        trip_id=_first_present(departure, ["trip_id", "tripId"]) or _first_present(trip, ["trip_id", "tripId", "id"]),
+        route_id=_first_present(departure, ["route_id", "routeId"]) or _first_present(route, ["route_id", "routeId", "id"]),
         route_short_name=_first_present(departure, ["route_short_name", "routeShortName", "headsign"])
-        or _first_present(route, ["route_short_name", "short_name", "route_id"]),
+        or _first_present(route, ["route_short_name", "routeShortName", "short_name", "shortName", "route_id", "id"]),
         scheduledDeparture=_parse_timestamp(scheduled),
         estimatedDeparture=_parse_timestamp(estimated),
         recordedTime=_parse_timestamp(recorded),
@@ -212,6 +212,10 @@ def flatten_departure(
 def iter_departures(payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     """Extract departures list from various API response shapes."""
     departures = payload.get("departures")
+    if departures is None:
+        departures = payload.get("result")
+    if departures is None:
+        departures = payload.get("Result")
     if departures is None:
         departures = _nested(payload, "data", "departures")
     if departures is None:

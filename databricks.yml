@@ -11,12 +11,12 @@ variables:
   stop_ids:
     description: Comma-separated CUMTD stop IDs to poll.
     default: it
-  api_base_url:
-    description: CUMTD API base URL.
-    default: https://developer.mtd.org/api
-  api_version:
-    description: CUMTD API version.
-    default: v3
+  s3_bucket:
+    description: S3 bucket containing Lambda departure snapshots.
+    default: cumtd-eta-drift
+  s3_prefix:
+    description: S3 prefix containing Lambda departure snapshots.
+    default: raw-departures
 
 resources:
   jobs:
@@ -43,13 +43,10 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-              api_base_url: ${var.api_base_url}
-              api_version: ${var.api_version}
-              departures_endpoint_path: json/getdeparturesbystop
+              s3_bucket: ${var.s3_bucket}
+              s3_prefix: ${var.s3_prefix}
               stop_ids: ${var.stop_ids}
               lookahead_minutes: "60"
-              request_timeout_seconds: "30"
-              max_retries: "3"
         - task_key: compute_departure_drift_metrics
           depends_on:
             - task_key: ingest_departure_snapshots

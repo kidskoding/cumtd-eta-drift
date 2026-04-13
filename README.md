@@ -6,8 +6,8 @@ Databricks-first project for auditing how CUMTD real-time departure estimates dr
 
 1. **Ingestion**
    - Notebook: `notebooks/01_ingest_departure_snapshots.py`
-   - Calls the CUMTD stops departures endpoint for one or more stops.
-   - Flattens responses into typed rows.
+   - Reads JSON snapshots written by the AWS Lambda departure fetcher into S3.
+   - Flattens API responses into typed rows.
    - Appends to Delta table `raw_departure_snapshots`.
 
 2. **Feature / Drift Computation**
@@ -30,7 +30,7 @@ Recommended job order:
 2. Run `02_compute_departure_drift_metrics.py` after ingestion, or as a separate batch job.
 3. Run `03_analyze_departure_drift.py` interactively or on a reporting cadence.
 
-There is also a Databricks Asset Bundle scaffold in `databricks.yml`. It defines a paused job that runs ingestion and then drift metric computation every five minutes. The default Unity Catalog target is `workspace.cumtd_eta_drift`; set `stop_ids` and API parameters for your workspace before enabling the schedule.
+There is also a Databricks Asset Bundle scaffold in `databricks.yml`. It defines a paused job that runs ingestion and then drift metric computation every five minutes. The default Unity Catalog target is `workspace.cumtd_eta_drift`; set `s3_bucket`, `s3_prefix`, and `stop_ids` for your workspace before enabling the schedule.
 
 ## dbt Transformation Layer
 
@@ -79,18 +79,12 @@ The ingestion notebook uses Databricks widgets:
 
 - `catalog`: Unity Catalog catalog name, default `workspace`.
 - `schema`: target schema/database, default `cumtd_eta_drift`.
-- `api_base_url`: base URL for the CUMTD API.
-- `api_version`: default `v3`.
-- `departures_endpoint_path`: endpoint path after the version segment, default `json/getdeparturesbystop`.
+- `s3_bucket`: S3 bucket containing Lambda departure snapshots, default `cumtd-eta-drift`.
+- `s3_prefix`: S3 prefix containing Lambda departure snapshots, default `raw-departures`.
 - `stop_ids`: comma-separated stop IDs to query.
-- `lookahead_minutes`: endpoint lookahead window when supported.
-- `request_timeout_seconds`: HTTP request timeout.
-- `max_retries`: per-stop retry count before recording a failed audit row.
-- `api_key_scope`: optional Databricks secret scope.
-- `api_key_name`: optional Databricks secret key.
-- `api_key_param`: query parameter name used for the API key, default `key`.
+- `lookahead_minutes`: retained for compatibility with the Lambda fetch configuration.
 
-If the deployed CUMTD v3 endpoint uses a different path or key parameter, update only the endpoint construction in `01_ingest_departure_snapshots.py`.
+The live API call happens in `lambda/lambda_function.py`, which uses `GET https://api.mtd.dev/stops/{stopId}/departures?time=...` with the `X-ApiKey` header.
 
 ## Delta Tables
 

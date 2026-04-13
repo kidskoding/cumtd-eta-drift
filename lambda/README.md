@@ -1,6 +1,6 @@
 # CUMTD Departure Fetcher — AWS Lambda
 
-Fetches real-time departures from the CUMTD API and writes JSON snapshots to S3.
+Fetches real-time departures from the MTD Developer API and writes JSON snapshots to S3.
 
 ## Setup
 
@@ -28,6 +28,7 @@ aws lambda create-function \
   --memory-size 128 \
   --environment Variables="{
     CUMTD_API_KEY=<YOUR_API_KEY>,
+    CUMTD_API_BASE_URL=https://api.mtd.dev,
     S3_BUCKET=cumtd-eta-drift,
     S3_PREFIX=raw-departures,
     STOP_IDS=IT,
@@ -106,6 +107,7 @@ Each JSON file contains:
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `CUMTD_API_KEY` | Yes | — | Your CUMTD developer API key |
+| `CUMTD_API_BASE_URL` | No | `https://api.mtd.dev` | MTD Developer API base URL |
 | `S3_BUCKET` | Yes | — | Target S3 bucket |
 | `S3_PREFIX` | No | `raw-departures` | S3 key prefix |
 | `STOP_IDS` | No | `IT` | Comma-separated stop IDs |

@@ -18,6 +18,7 @@ import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict
+from urllib.parse import quote, urlencode
 
 import boto3
 import urllib3
@@ -25,8 +26,7 @@ import urllib3
 # ---------------------------------------------------------------------------
 # Config from environment
 # ---------------------------------------------------------------------------
-API_BASE_URL = os.environ.get("CUMTD_API_BASE_URL", "https://api.mtd.dev/api")
-API_VERSION = os.environ.get("CUMTD_API_VERSION", "v2.2")
+API_BASE_URL = os.environ.get("CUMTD_API_BASE_URL", "https://api.mtd.dev")
 API_KEY = os.environ.get("CUMTD_API_KEY", "")
 S3_BUCKET = os.environ["S3_BUCKET"]
 S3_PREFIX = os.environ.get("S3_PREFIX", "raw-departures").strip("/")
@@ -41,23 +41,22 @@ s3 = boto3.client("s3")
 
 def _build_url(stop_id: str) -> str:
     base = API_BASE_URL.rstrip("/")
-    version = API_VERSION.strip("/")
-    return f"{base}/{version}/json/getdeparturesbystop"
+    encoded_stop_id = quote(stop_id, safe="")
+    return f"{base}/stops/{encoded_stop_id}/departures"
 
 
 def _fetch(stop_id: str) -> Dict[str, Any]:
     url = _build_url(stop_id)
-    params = {"stop_id": stop_id, "pt": str(LOOKAHEAD_MINUTES)}
-    if API_KEY:
-        params["key"] = API_KEY
+    params = {"time": str(LOOKAHEAD_MINUTES)}
+    headers = {"X-ApiKey": API_KEY} if API_KEY else {}
 
-    query = "&".join(f"{k}={v}" for k, v in params.items())
+    query = urlencode(params)
     full_url = f"{url}?{query}"
 
     last_err = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = http.request("GET", full_url)
+            resp = http.request("GET", full_url, headers=headers)
             if resp.status == 200:
                 return json.loads(resp.data.decode("utf-8"))
             last_err = RuntimeError(f"HTTP {resp.status}: {resp.data[:200]}")

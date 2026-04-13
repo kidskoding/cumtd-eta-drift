@@ -103,6 +103,7 @@ aws lambda create-function \
     --memory-size 128 \
     --environment "Variables={
         CUMTD_API_KEY=$CUMTD_API_KEY,
+        CUMTD_API_BASE_URL=https://api.mtd.dev,
         S3_BUCKET=$S3_BUCKET,
         S3_PREFIX=raw-departures,
         STOP_IDS=$STOP_IDS,
@@ -119,6 +120,7 @@ aws lambda create-function \
             --function-name "$FUNCTION_NAME" \
             --environment "Variables={
                 CUMTD_API_KEY=$CUMTD_API_KEY,
+                CUMTD_API_BASE_URL=https://api.mtd.dev,
                 S3_BUCKET=$S3_BUCKET,
                 S3_PREFIX=raw-departures,
                 STOP_IDS=$STOP_IDS,
