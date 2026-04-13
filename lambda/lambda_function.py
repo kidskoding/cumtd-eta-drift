@@ -25,8 +25,8 @@ import urllib3
 # ---------------------------------------------------------------------------
 # Config from environment
 # ---------------------------------------------------------------------------
-API_BASE_URL = os.environ.get("CUMTD_API_BASE_URL", "https://api.mtd.dev")
-API_VERSION = os.environ.get("CUMTD_API_VERSION", "v3")
+API_BASE_URL = os.environ.get("CUMTD_API_BASE_URL", "https://api.mtd.dev/api")
+API_VERSION = os.environ.get("CUMTD_API_VERSION", "v2.2")
 API_KEY = os.environ.get("CUMTD_API_KEY", "")
 S3_BUCKET = os.environ["S3_BUCKET"]
 S3_PREFIX = os.environ.get("S3_PREFIX", "raw-departures").strip("/")
