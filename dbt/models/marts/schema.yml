@@ -20,6 +20,8 @@ models:
       - name: source_stop_id
         tests:
           - not_null
+      - name: stop_display_name
+        description: Human-readable stop or boarding point label for charts and summaries.
 
   - name: int_departure_eta_updates
     description: Snapshot-level ETA update deltas for each stop/trip/route observation sequence.
@@ -33,6 +35,8 @@ models:
       - name: stop_id
         tests:
           - not_null
+      - name: stop_display_name
+        description: Human-readable stop or boarding point label carried from staging.
       - name: trip_id
         tests:
           - not_null
@@ -59,6 +63,8 @@ models:
       - name: stop_id
         tests:
           - not_null
+      - name: stop_display_name
+        description: Human-readable stop or boarding point label for this metric row.
       - name: trip_id
         tests:
           - not_null
@@ -78,6 +84,8 @@ models:
       - name: stop_id
         tests:
           - not_null
+      - name: stop_display_name
+        description: Human-readable stop or boarding point label for reporting.
 
   - name: daily_route_drift_summary
     description: Daily drift summary by route.

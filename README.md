@@ -93,6 +93,7 @@ The ingestion notebook uses Databricks widgets:
 
 The live API call happens in `lambda/lambda_function.py`, which uses `GET https://api.mtd.dev/stops/{stopId}/departures?time=...` with the `X-ApiKey` header.
 The Lambda also calls `GET https://api.mtd.dev/stops/{stopId}` so new S3 snapshots include `stop_name`; the override widget keeps older S3 snapshots usable.
+Stop metadata is carried through the raw and dbt tables so charts can use labels like `Illinois Terminal (Platform 5)` instead of only API IDs like `IT:5`.
 
 ## Delta Tables
 
@@ -108,6 +109,17 @@ One row per observed departure prediction at ingestion time.
 | source_stop_id | string |
 | stop_id | string |
 | stop_name | string |
+| stop_display_name | string |
+| stop_group_id | string |
+| stop_group_name | string |
+| boarding_point_id | string |
+| boarding_point_name | string |
+| boarding_point_sub_name | string |
+| stop_code | string |
+| stop_city | string |
+| stop_latitude | double |
+| stop_longitude | double |
+| is_station | boolean |
 | trip_id | string |
 | route_id | string |
 | route_short_name | string |
@@ -130,6 +142,17 @@ One row per stop/trip/route grouping.
 | last_ingestion_date | date |
 | stop_id | string |
 | stop_name | string |
+| stop_display_name | string |
+| stop_group_id | string |
+| stop_group_name | string |
+| boarding_point_id | string |
+| boarding_point_name | string |
+| boarding_point_sub_name | string |
+| stop_code | string |
+| stop_city | string |
+| stop_latitude | double |
+| stop_longitude | double |
+| is_station | boolean |
 | trip_id | string |
 | route_id | string |
 | route_short_name | string |

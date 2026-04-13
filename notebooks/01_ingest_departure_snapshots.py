@@ -89,6 +89,17 @@ raw_schema = StructType(
         StructField("source_stop_id", StringType(), False),
         StructField("stop_id", StringType(), True),
         StructField("stop_name", StringType(), True),
+        StructField("stop_display_name", StringType(), True),
+        StructField("stop_group_id", StringType(), True),
+        StructField("stop_group_name", StringType(), True),
+        StructField("boarding_point_id", StringType(), True),
+        StructField("boarding_point_name", StringType(), True),
+        StructField("boarding_point_sub_name", StringType(), True),
+        StructField("stop_code", StringType(), True),
+        StructField("stop_city", StringType(), True),
+        StructField("stop_latitude", DoubleType(), True),
+        StructField("stop_longitude", DoubleType(), True),
+        StructField("is_station", BooleanType(), True),
         StructField("trip_id", StringType(), True),
         StructField("route_id", StringType(), True),
         StructField("route_short_name", StringType(), True),
@@ -101,6 +112,20 @@ raw_schema = StructType(
         StructField("raw_departure_json", StringType(), True),
     ]
 )
+
+raw_column_types = {
+    "stop_display_name": "STRING",
+    "stop_group_id": "STRING",
+    "stop_group_name": "STRING",
+    "boarding_point_id": "STRING",
+    "boarding_point_name": "STRING",
+    "boarding_point_sub_name": "STRING",
+    "stop_code": "STRING",
+    "stop_city": "STRING",
+    "stop_latitude": "DOUBLE",
+    "stop_longitude": "DOUBLE",
+    "is_station": "BOOLEAN",
+}
 
 audit_schema = StructType(
     [
@@ -126,6 +151,11 @@ empty_df = spark.createDataFrame([], raw_schema)
     .option("mergeSchema", "false")
     .saveAsTable(raw_table)
 )
+
+existing_raw_columns = {field.name for field in spark.table(raw_table).schema.fields}
+for column_name, column_type in raw_column_types.items():
+    if column_name not in existing_raw_columns:
+        spark.sql(f"ALTER TABLE {raw_table} ADD COLUMNS ({column_name} {column_type})")
 
 empty_audit_df = spark.createDataFrame([], audit_schema)
 (
@@ -193,12 +223,76 @@ def _nested(payload: Dict[str, Any], *path: str) -> Any:
         cursor = cursor.get(part)
     return cursor
 
+
+def _boarding_point_map(stop_metadata: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    boarding_points = stop_metadata.get("boarding_points") or stop_metadata.get("boardingPoints") or []
+    if not isinstance(boarding_points, list):
+        return {}
+
+    return {
+        str(boarding_point.get("id")): boarding_point
+        for boarding_point in boarding_points
+        if isinstance(boarding_point, dict) and boarding_point.get("id")
+    }
+
+
+def _resolve_stop_metadata(
+    stop_metadata: Dict[str, Any],
+    departure_stop_id: str | None,
+    fallback_stop_name: str | None,
+) -> Dict[str, Any]:
+    boarding_point = _boarding_point_map(stop_metadata).get(str(departure_stop_id))
+
+    group_name = (
+        stop_metadata.get("stop_group_name")
+        or stop_metadata.get("name")
+        or fallback_stop_name
+    )
+    group_id = stop_metadata.get("stop_group_id") or stop_metadata.get("id")
+
+    if boarding_point:
+        boarding_point_name = boarding_point.get("name")
+        boarding_point_sub_name = boarding_point.get("sub_name") or boarding_point.get("subName")
+        display_name = boarding_point_name or (
+            f"{group_name} ({boarding_point_sub_name})"
+            if group_name and boarding_point_sub_name
+            else group_name
+        )
+        return {
+            "stop_display_name": display_name,
+            "stop_group_id": group_id,
+            "stop_group_name": group_name,
+            "boarding_point_id": boarding_point.get("id"),
+            "boarding_point_name": boarding_point_name,
+            "boarding_point_sub_name": boarding_point_sub_name,
+            "stop_code": boarding_point.get("stop_code") or boarding_point.get("stopCode") or stop_metadata.get("stop_code") or stop_metadata.get("stopCode"),
+            "stop_city": stop_metadata.get("city"),
+            "stop_latitude": _as_float(boarding_point.get("latitude")),
+            "stop_longitude": _as_float(boarding_point.get("longitude")),
+            "is_station": _as_bool(stop_metadata.get("is_station") if "is_station" in stop_metadata else stop_metadata.get("isStation")),
+        }
+
+    return {
+        "stop_display_name": group_name,
+        "stop_group_id": group_id,
+        "stop_group_name": group_name,
+        "boarding_point_id": departure_stop_id if departure_stop_id and ":" in departure_stop_id else None,
+        "boarding_point_name": None,
+        "boarding_point_sub_name": None,
+        "stop_code": stop_metadata.get("stop_code") or stop_metadata.get("stopCode"),
+        "stop_city": stop_metadata.get("city"),
+        "stop_latitude": _as_float(stop_metadata.get("latitude")),
+        "stop_longitude": _as_float(stop_metadata.get("longitude")),
+        "is_station": _as_bool(stop_metadata.get("is_station") if "is_station" in stop_metadata else stop_metadata.get("isStation")),
+    }
+
 # COMMAND ----------
 
 def flatten_departure(
     run_id: str,
     source_stop_id: str,
     source_stop_name: str | None,
+    source_stop_metadata: Dict[str, Any],
     payload: Dict[str, Any],
     departure: Dict[str, Any],
     ingestion_ts: datetime,
@@ -211,14 +305,33 @@ def flatten_departure(
     scheduled = _first_present(departure, ["scheduledDeparture", "scheduled_departure", "scheduled"])
     estimated = _first_present(departure, ["estimatedDeparture", "estimated_departure", "expected"])
     recorded = _first_present(departure, ["recordedTime", "recorded_time"])
+    departure_stop_id = _first_present(departure, ["stop_id", "stopId"]) or _first_present(stop, ["stop_id", "id"])
+    stop_context = _resolve_stop_metadata(source_stop_metadata, departure_stop_id, source_stop_name)
+    stop_name = (
+        _first_present(departure, ["stop_name", "stopName"])
+        or _first_present(stop, ["stop_name", "name"])
+        or stop_context["stop_group_name"]
+        or source_stop_name
+    )
 
     return Row(
         run_id=run_id,
         ingestion_timestamp=ingestion_ts,
         ingestion_date=ingestion_ts.date(),
         source_stop_id=source_stop_id,
-        stop_id=_first_present(departure, ["stop_id", "stopId"]) or _first_present(stop, ["stop_id", "id"]),
-        stop_name=_first_present(departure, ["stop_name", "stopName"]) or _first_present(stop, ["stop_name", "name"]) or source_stop_name,
+        stop_id=departure_stop_id,
+        stop_name=stop_name,
+        stop_display_name=stop_context["stop_display_name"] or stop_name,
+        stop_group_id=stop_context["stop_group_id"],
+        stop_group_name=stop_context["stop_group_name"],
+        boarding_point_id=stop_context["boarding_point_id"],
+        boarding_point_name=stop_context["boarding_point_name"],
+        boarding_point_sub_name=stop_context["boarding_point_sub_name"],
+        stop_code=stop_context["stop_code"],
+        stop_city=stop_context["stop_city"],
+        stop_latitude=stop_context["stop_latitude"],
+        stop_longitude=stop_context["stop_longitude"],
+        is_station=stop_context["is_station"],
         trip_id=_first_present(departure, ["trip_id", "tripId"]) or _first_present(trip, ["trip_id", "tripId", "id"]),
         route_id=_first_present(departure, ["route_id", "routeId"]) or _first_present(route, ["route_id", "routeId", "id"]),
         route_short_name=_first_present(departure, ["route_short_name", "routeShortName", "headsign"])
@@ -296,13 +409,14 @@ print(f"Found {len(envelopes)} snapshot file(s) in S3")
 for envelope in envelopes:
     stop_id = envelope.get("stop_id", "unknown")
     stop_name = envelope.get("stop_name") or stop_name_overrides.get(stop_id)
+    stop_metadata = envelope.get("stop_metadata") or {}
     fetch_ts_str = envelope.get("fetch_timestamp")
     fetch_ts = _parse_timestamp(fetch_ts_str) if fetch_ts_str else ingestion_ts
     payload = envelope.get("api_response", {})
 
     try:
         stop_rows = [
-            flatten_departure(run_id, stop_id, stop_name, payload, dep, fetch_ts)
+            flatten_departure(run_id, stop_id, stop_name, stop_metadata, payload, dep, fetch_ts)
             for dep in iter_departures(payload)
         ]
         rows.extend(stop_rows)

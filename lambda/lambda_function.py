@@ -82,14 +82,45 @@ def _fetch_stop_metadata(stop_id: str) -> Dict[str, Any]:
     return _request_json(_build_stop_url(stop_id))
 
 
-def _extract_stop_name(stop_metadata: Dict[str, Any]) -> str | None:
+def _extract_stop_metadata(stop_metadata: Dict[str, Any]) -> Dict[str, Any]:
     result = stop_metadata.get("result") or stop_metadata.get("Result") or {}
     if not isinstance(result, dict):
-        return None
-    return result.get("name")
+        return {}
+
+    location = result.get("location") or {}
+    boarding_points = []
+    for boarding_point in result.get("boardingPoints") or []:
+        if not isinstance(boarding_point, dict):
+            continue
+        bp_location = boarding_point.get("location") or {}
+        boarding_points.append(
+            {
+                "id": boarding_point.get("id"),
+                "name": boarding_point.get("name"),
+                "sub_name": boarding_point.get("subName"),
+                "stop_code": boarding_point.get("stopCode"),
+                "url": boarding_point.get("url"),
+                "is_accessible": boarding_point.get("isAccessible"),
+                "latitude": bp_location.get("latitude"),
+                "longitude": bp_location.get("longitude"),
+            }
+        )
+
+    return {
+        "stop_group_id": result.get("id"),
+        "stop_group_name": result.get("name"),
+        "stop_code": result.get("stopCode"),
+        "url": result.get("url"),
+        "city": result.get("city"),
+        "is_station": result.get("isStation"),
+        "is_accessible": result.get("isAccessible"),
+        "latitude": location.get("latitude"),
+        "longitude": location.get("longitude"),
+        "boarding_points": boarding_points,
+    }
 
 
-def _write_to_s3(stop_id: str, stop_name: str | None, payload: Dict[str, Any], ts: datetime) -> str:
+def _write_to_s3(stop_id: str, stop_metadata: Dict[str, Any], payload: Dict[str, Any], ts: datetime) -> str:
     date_part = ts.strftime("%Y-%m-%d")
     time_part = ts.strftime("%H-%M-%S")
     key = f"{S3_PREFIX}/{date_part}/{time_part}_{stop_id}.json"
@@ -97,7 +128,8 @@ def _write_to_s3(stop_id: str, stop_name: str | None, payload: Dict[str, Any], t
     envelope = {
         "fetch_timestamp": ts.isoformat(),
         "stop_id": stop_id,
-        "stop_name": stop_name,
+        "stop_name": stop_metadata.get("stop_group_name"),
+        "stop_metadata": stop_metadata,
         "api_response": payload,
     }
 
@@ -116,11 +148,17 @@ def lambda_handler(event, context):
 
     for stop_id in STOP_IDS:
         try:
-            stop_metadata = _fetch_stop_metadata(stop_id)
-            stop_name = _extract_stop_name(stop_metadata)
+            stop_metadata = _extract_stop_metadata(_fetch_stop_metadata(stop_id))
             payload = _fetch_departures(stop_id)
-            s3_path = _write_to_s3(stop_id, stop_name, payload, ts)
-            results.append({"stop_id": stop_id, "stop_name": stop_name, "status": "success", "s3_path": s3_path})
+            s3_path = _write_to_s3(stop_id, stop_metadata, payload, ts)
+            results.append(
+                {
+                    "stop_id": stop_id,
+                    "stop_name": stop_metadata.get("stop_group_name"),
+                    "status": "success",
+                    "s3_path": s3_path,
+                }
+            )
         except Exception as exc:
             results.append({"stop_id": stop_id, "status": "failed", "error": str(exc)})
 

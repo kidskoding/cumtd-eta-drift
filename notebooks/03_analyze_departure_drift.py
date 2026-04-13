@@ -53,6 +53,18 @@ print(f"Analyzing stop_id={selected_stop_id}, trip_id={selected_trip_id}")
 
 # COMMAND ----------
 
+selected_metric = (
+    metrics_df.where(col("trip_id") == selected_trip_id)
+    .where(col("stop_id") == selected_stop_id)
+    .limit(1)
+    .collect()
+)
+selected_stop_label = selected_stop_id
+if selected_metric:
+    selected_stop_label = selected_metric[0].asDict().get("stop_display_name") or selected_metric[0].asDict().get("stop_name") or selected_stop_id
+
+# COMMAND ----------
+
 trip_pdf = (
     raw_df.where(col("trip_id") == selected_trip_id)
     .where(col("stop_id") == selected_stop_id)
@@ -82,7 +94,7 @@ plt.plot(
 plt.gca().invert_xaxis()
 plt.xlabel("Minutes before estimated departure")
 plt.ylabel("Estimated departure time")
-plt.title(f"ETA drift over repeated snapshots: stop={selected_stop_id}, trip={selected_trip_id}")
+plt.title(f"ETA drift over repeated snapshots: {selected_stop_label}")
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
@@ -112,7 +124,7 @@ plt.show()
 # COMMAND ----------
 
 top_stops_df = (
-    metrics_df.groupBy("stop_id")
+    metrics_df.groupBy("stop_id", "stop_display_name")
     .avg("drift_minutes")
     .withColumnRenamed("avg(drift_minutes)", "avg_drift_minutes")
     .orderBy(desc("avg_drift_minutes"))

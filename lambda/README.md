@@ -99,7 +99,73 @@ Each JSON file contains:
   "fetch_timestamp": "2026-04-13T12:00:00+00:00",
   "stop_id": "IT",
   "stop_name": "Illinois Terminal",
+  "stop_metadata": {
+    "stop_group_id": "IT",
+    "stop_group_name": "Illinois Terminal",
+    "boarding_points": [
+      {
+        "id": "IT:5",
+        "name": "Illinois Terminal (Platform 5)",
+        "sub_name": "Platform 5",
+        "latitude": 40.115,
+        "longitude": -88.241
+      }
+    ]
+  },
   "api_response": { ... }
+}
+```
+
+## GitHub Actions Deployment
+
+The repo includes `.github/workflows/deploy-lambda.yml`, which packages `lambda_function.py` and updates the Lambda function whenever that file changes on `master`. You can also run it manually from the GitHub Actions tab.
+
+Configure these GitHub settings before using it:
+
+| Setting | Type | Example |
+|---|---|---|
+| `AWS_ROLE_TO_ASSUME` | Secret | `arn:aws:iam::<ACCOUNT_ID>:role/github-cumtd-lambda-deploy` |
+| `AWS_REGION` | Variable | `us-east-1` |
+| `LAMBDA_FUNCTION_NAME` | Variable | `cumtd-departure-fetcher` |
+
+The deploy role should trust GitHub's OIDC provider and only need Lambda update permissions for this function:
+
+Trust policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": "repo:kidskoding/cumtd-eta-drift:*"
+        }
+      }
+    }
+  ]
+}
+```
+
+Permissions policy:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "lambda:UpdateFunctionCode",
+    "lambda:GetFunction",
+    "lambda:GetFunctionConfiguration"
+  ],
+  "Resource": "arn:aws:lambda:<REGION>:<ACCOUNT_ID>:function:cumtd-departure-fetcher"
 }
 ```
 
