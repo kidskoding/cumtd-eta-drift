@@ -1,0 +1,51 @@
+version: 2
+
+sources:
+  - name: cumtd_raw
+    description: Raw CUMTD API data loaded by Databricks Python ingestion.
+    database: "{{ var('catalog') if var('catalog') else target.database }}"
+    schema: "{{ var('raw_schema') }}"
+    tables:
+      - name: raw_departure_snapshots
+        description: One row per observed departure prediction at ingestion time.
+        config:
+          loaded_at_field: ingestion_timestamp
+        columns:
+          - name: run_id
+            tests:
+              - not_null
+          - name: ingestion_timestamp
+            tests:
+              - not_null
+          - name: ingestion_date
+            tests:
+              - not_null
+          - name: source_stop_id
+            tests:
+              - not_null
+          - name: stop_id
+          - name: trip_id
+          - name: estimatedDeparture
+          - name: scheduledDeparture
+      - name: departure_ingestion_audit
+        description: One row per stop queried in each ingestion run.
+        config:
+          loaded_at_field: ingestion_timestamp
+        columns:
+          - name: run_id
+            tests:
+              - not_null
+          - name: ingestion_timestamp
+            tests:
+              - not_null
+          - name: ingestion_date
+            tests:
+              - not_null
+          - name: source_stop_id
+            tests:
+              - not_null
+          - name: status
+            tests:
+              - accepted_values:
+                  arguments:
+                    values: ['success', 'failed']

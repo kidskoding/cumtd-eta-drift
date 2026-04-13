@@ -1,0 +1,11 @@
+cumtd_eta_drift:
+  target: dev
+  outputs:
+    dev:
+      type: databricks
+      catalog: workspace
+      schema: cumtd_eta_drift
+      host: YOUR_WORKSPACE_HOST
+      http_path: YOUR_SQL_WAREHOUSE_OR_CLUSTER_HTTP_PATH
+      token: "{{ env_var('DATABRICKS_TOKEN') }}"
+      threads: 4

@@ -1,0 +1,87 @@
+version: 2
+
+models:
+  - name: stg_departure_snapshots
+    description: Clean column names and derived timestamp features for raw CUMTD departure snapshots.
+    columns:
+      - name: snapshot_key
+        tests:
+          - not_null
+          - unique
+      - name: run_id
+        tests:
+          - not_null
+      - name: ingestion_timestamp
+        tests:
+          - not_null
+      - name: ingestion_date
+        tests:
+          - not_null
+      - name: source_stop_id
+        tests:
+          - not_null
+
+  - name: int_departure_eta_updates
+    description: Snapshot-level ETA update deltas for each stop/trip/route observation sequence.
+    columns:
+      - name: snapshot_key
+        tests:
+          - not_null
+      - name: run_id
+        tests:
+          - not_null
+      - name: stop_id
+        tests:
+          - not_null
+      - name: trip_id
+        tests:
+          - not_null
+      - name: estimated_departure
+        tests:
+          - not_null
+      - name: scheduled_departure
+        tests:
+          - not_null
+
+  - name: departure_drift_metrics
+    description: Trip-level ETA drift metrics by stop, trip, and route.
+    columns:
+      - name: metric_key
+        tests:
+          - not_null
+          - unique
+      - name: first_ingestion_date
+        tests:
+          - not_null
+      - name: last_ingestion_date
+        tests:
+          - not_null
+      - name: stop_id
+        tests:
+          - not_null
+      - name: trip_id
+        tests:
+          - not_null
+      - name: drift_minutes
+        tests:
+          - not_null
+      - name: update_count
+        tests:
+          - not_null
+
+  - name: daily_stop_drift_summary
+    description: Daily drift summary by stop.
+    columns:
+      - name: service_date
+        tests:
+          - not_null
+      - name: stop_id
+        tests:
+          - not_null
+
+  - name: daily_route_drift_summary
+    description: Daily drift summary by route.
+    columns:
+      - name: service_date
+        tests:
+          - not_null

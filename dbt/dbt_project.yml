@@ -1,0 +1,31 @@
+name: cumtd_eta_drift
+version: 0.1.0
+config-version: 2
+
+profile: cumtd_eta_drift
+
+model-paths:
+  - models
+test-paths:
+  - tests
+macro-paths:
+  - macros
+
+clean-targets:
+  - target
+  - dbt_packages
+
+vars:
+  catalog: workspace
+  raw_schema: cumtd_eta_drift
+  mart_schema: cumtd_eta_drift
+
+models:
+  cumtd_eta_drift:
+    +file_format: delta
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table
