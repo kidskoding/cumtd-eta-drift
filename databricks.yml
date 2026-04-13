@@ -1,0 +1,72 @@
+bundle:
+  name: cumtd_eta_drift
+
+variables:
+  catalog:
+    description: Unity Catalog catalog for project tables.
+    default: workspace
+  schema:
+    description: Target schema/database for Delta tables.
+    default: cumtd_eta_drift
+  stop_ids:
+    description: Comma-separated CUMTD stop IDs to poll.
+    default: it
+  api_base_url:
+    description: CUMTD API base URL.
+    default: https://developer.mtd.org/api
+  api_version:
+    description: CUMTD API version.
+    default: v3
+
+resources:
+  jobs:
+    cumtd_eta_drift_audit:
+      name: CUMTD v3 Transit ETA Drift Audit
+      schedule:
+        quartz_cron_expression: "0 0/5 * * * ?"
+        timezone_id: America/Chicago
+        pause_status: PAUSED
+      max_concurrent_runs: 1
+      job_clusters:
+        - job_cluster_key: eta_drift_cluster
+          new_cluster:
+            spark_version: 15.4.x-scala2.12
+            node_type_id: i3.xlarge
+            autoscale:
+              min_workers: 1
+              max_workers: 2
+      tasks:
+        - task_key: ingest_departure_snapshots
+          job_cluster_key: eta_drift_cluster
+          notebook_task:
+            notebook_path: notebooks/01_ingest_departure_snapshots.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              api_base_url: ${var.api_base_url}
+              api_version: ${var.api_version}
+              departures_endpoint_path: json/getdeparturesbystop
+              stop_ids: ${var.stop_ids}
+              lookahead_minutes: "60"
+              request_timeout_seconds: "30"
+              max_retries: "3"
+        - task_key: compute_departure_drift_metrics
+          depends_on:
+            - task_key: ingest_departure_snapshots
+          job_cluster_key: eta_drift_cluster
+          dbt_task:
+            project_directory: dbt
+            commands:
+              - "dbt deps"
+              - "dbt run --vars '{\"catalog\": \"${var.catalog}\", \"raw_schema\": \"${var.schema}\", \"mart_schema\": \"${var.schema}\"}'"
+              - "dbt test --vars '{\"catalog\": \"${var.catalog}\", \"raw_schema\": \"${var.schema}\", \"mart_schema\": \"${var.schema}\"}'"
+          libraries:
+            - pypi:
+                package: dbt-databricks>=1.10,<2
+
+targets:
+  dev:
+    mode: development
+    default: true
+  prod:
+    mode: production
