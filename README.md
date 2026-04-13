@@ -83,8 +83,10 @@ The ingestion notebook uses Databricks widgets:
 - `s3_prefix`: S3 prefix containing Lambda departure snapshots, default `raw-departures`.
 - `stop_ids`: comma-separated stop IDs to query.
 - `lookahead_minutes`: retained for compatibility with the Lambda fetch configuration.
+- `stop_name_overrides`: optional comma-separated stop name fallbacks, default `IT=Illinois Terminal`.
 
 The live API call happens in `lambda/lambda_function.py`, which uses `GET https://api.mtd.dev/stops/{stopId}/departures?time=...` with the `X-ApiKey` header.
+The Lambda also calls `GET https://api.mtd.dev/stops/{stopId}` so new S3 snapshots include `stop_name`; the override widget keeps older S3 snapshots usable.
 
 ## Delta Tables
 

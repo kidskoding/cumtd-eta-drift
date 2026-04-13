@@ -37,6 +37,7 @@ dbutils.widgets.text("s3_bucket", "cumtd-eta-drift")
 dbutils.widgets.text("s3_prefix", "raw-departures")
 dbutils.widgets.text("stop_ids", "IT")
 dbutils.widgets.text("lookahead_minutes", "60")
+dbutils.widgets.text("stop_name_overrides", "IT=Illinois Terminal")
 
 catalog = dbutils.widgets.get("catalog").strip()
 schema_name = dbutils.widgets.get("schema").strip()
@@ -44,6 +45,7 @@ s3_bucket = dbutils.widgets.get("s3_bucket").strip()
 s3_prefix = dbutils.widgets.get("s3_prefix").strip().strip("/")
 stop_ids = [s.strip() for s in dbutils.widgets.get("stop_ids").split(",") if s.strip()]
 lookahead_minutes = int(dbutils.widgets.get("lookahead_minutes"))
+stop_name_override_text = dbutils.widgets.get("stop_name_overrides").strip()
 
 if not stop_ids:
     raise ValueError("Provide at least one stop_id in the stop_ids widget.")
@@ -55,6 +57,27 @@ s3_path = f"s3://{s3_bucket}/{s3_prefix}"
 
 print(f"Reading snapshots from: {s3_path}")
 print(f"Writing to: {raw_table}")
+
+# COMMAND ----------
+
+def parse_stop_name_overrides(value: str) -> Dict[str, str]:
+    """Parse comma-separated stop-name pairs, e.g. IT=Illinois Terminal,IU=Illini Union."""
+    overrides: Dict[str, str] = {}
+    if not value:
+        return overrides
+
+    for pair in value.split(","):
+        if "=" not in pair:
+            raise ValueError(f"Invalid stop_name_overrides entry: {pair!r}")
+        stop_id, stop_name = pair.split("=", 1)
+        stop_id = stop_id.strip()
+        stop_name = stop_name.strip()
+        if stop_id and stop_name:
+            overrides[stop_id] = stop_name
+    return overrides
+
+
+stop_name_overrides = parse_stop_name_overrides(stop_name_override_text)
 
 # COMMAND ----------
 
@@ -272,7 +295,7 @@ print(f"Found {len(envelopes)} snapshot file(s) in S3")
 
 for envelope in envelopes:
     stop_id = envelope.get("stop_id", "unknown")
-    stop_name = envelope.get("stop_name")
+    stop_name = envelope.get("stop_name") or stop_name_overrides.get(stop_id)
     fetch_ts_str = envelope.get("fetch_timestamp")
     fetch_ts = _parse_timestamp(fetch_ts_str) if fetch_ts_str else ingestion_ts
     payload = envelope.get("api_response", {})
