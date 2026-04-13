@@ -1,0 +1,16 @@
+[project]
+name = "cumtd-eta-drift"
+version = "0.1.0"
+description = "auditing real-time CUMTD transit ETA stability using CUMTD v3 data and Databricks to measure estimate drift and system reliability"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "matplotlib>=3.10.8",
+    "pandas>=2.2,<2.4",
+    "pyspark>=3.5,<4",
+    "requests>=2.33.1",
+]
+
+[dependency-groups]
+dev = [
+    "dbt-databricks>=1.10,<2",
+]
