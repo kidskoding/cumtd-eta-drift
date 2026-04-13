@@ -98,6 +98,7 @@ Each JSON file contains:
 {
   "fetch_timestamp": "2026-04-13T12:00:00+00:00",
   "stop_id": "IT",
+  "stop_name": "Illinois Terminal",
   "api_response": { ... }
 }
 ```

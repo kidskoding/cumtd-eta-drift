@@ -175,6 +175,7 @@ def _nested(payload: Dict[str, Any], *path: str) -> Any:
 def flatten_departure(
     run_id: str,
     source_stop_id: str,
+    source_stop_name: str | None,
     payload: Dict[str, Any],
     departure: Dict[str, Any],
     ingestion_ts: datetime,
@@ -194,7 +195,7 @@ def flatten_departure(
         ingestion_date=ingestion_ts.date(),
         source_stop_id=source_stop_id,
         stop_id=_first_present(departure, ["stop_id", "stopId"]) or _first_present(stop, ["stop_id", "id"]),
-        stop_name=_first_present(departure, ["stop_name", "stopName"]) or _first_present(stop, ["stop_name", "name"]),
+        stop_name=_first_present(departure, ["stop_name", "stopName"]) or _first_present(stop, ["stop_name", "name"]) or source_stop_name,
         trip_id=_first_present(departure, ["trip_id", "tripId"]) or _first_present(trip, ["trip_id", "tripId", "id"]),
         route_id=_first_present(departure, ["route_id", "routeId"]) or _first_present(route, ["route_id", "routeId", "id"]),
         route_short_name=_first_present(departure, ["route_short_name", "routeShortName", "headsign"])
@@ -271,13 +272,14 @@ print(f"Found {len(envelopes)} snapshot file(s) in S3")
 
 for envelope in envelopes:
     stop_id = envelope.get("stop_id", "unknown")
+    stop_name = envelope.get("stop_name")
     fetch_ts_str = envelope.get("fetch_timestamp")
     fetch_ts = _parse_timestamp(fetch_ts_str) if fetch_ts_str else ingestion_ts
     payload = envelope.get("api_response", {})
 
     try:
         stop_rows = [
-            flatten_departure(run_id, stop_id, payload, dep, fetch_ts)
+            flatten_departure(run_id, stop_id, stop_name, payload, dep, fetch_ts)
             for dep in iter_departures(payload)
         ]
         rows.extend(stop_rows)

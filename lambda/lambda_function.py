@@ -39,19 +39,20 @@ http = urllib3.PoolManager(timeout=urllib3.Timeout(total=REQUEST_TIMEOUT))
 s3 = boto3.client("s3")
 
 
-def _build_url(stop_id: str) -> str:
+def _build_stop_url(stop_id: str) -> str:
     base = API_BASE_URL.rstrip("/")
     encoded_stop_id = quote(stop_id, safe="")
-    return f"{base}/stops/{encoded_stop_id}/departures"
+    return f"{base}/stops/{encoded_stop_id}"
 
 
-def _fetch(stop_id: str) -> Dict[str, Any]:
-    url = _build_url(stop_id)
-    params = {"time": str(LOOKAHEAD_MINUTES)}
+def _build_departures_url(stop_id: str) -> str:
+    return f"{_build_stop_url(stop_id)}/departures"
+
+
+def _request_json(url: str, params: Dict[str, str] | None = None) -> Dict[str, Any]:
+    query = f"?{urlencode(params)}" if params else ""
+    full_url = f"{url}{query}"
     headers = {"X-ApiKey": API_KEY} if API_KEY else {}
-
-    query = urlencode(params)
-    full_url = f"{url}?{query}"
 
     last_err = None
     for attempt in range(1, MAX_RETRIES + 1):
@@ -66,11 +67,29 @@ def _fetch(stop_id: str) -> Dict[str, Any]:
             time.sleep(min(2 ** (attempt - 1), 8))
 
     raise RuntimeError(
-        f"Failed to fetch stop_id={stop_id} after {MAX_RETRIES} attempts: {last_err}"
+        f"Failed to fetch {full_url} after {MAX_RETRIES} attempts: {last_err}"
     )
 
 
-def _write_to_s3(stop_id: str, payload: Dict[str, Any], ts: datetime) -> str:
+def _fetch_departures(stop_id: str) -> Dict[str, Any]:
+    return _request_json(
+        _build_departures_url(stop_id),
+        params={"time": str(LOOKAHEAD_MINUTES)},
+    )
+
+
+def _fetch_stop_metadata(stop_id: str) -> Dict[str, Any]:
+    return _request_json(_build_stop_url(stop_id))
+
+
+def _extract_stop_name(stop_metadata: Dict[str, Any]) -> str | None:
+    result = stop_metadata.get("result") or stop_metadata.get("Result") or {}
+    if not isinstance(result, dict):
+        return None
+    return result.get("name")
+
+
+def _write_to_s3(stop_id: str, stop_name: str | None, payload: Dict[str, Any], ts: datetime) -> str:
     date_part = ts.strftime("%Y-%m-%d")
     time_part = ts.strftime("%H-%M-%S")
     key = f"{S3_PREFIX}/{date_part}/{time_part}_{stop_id}.json"
@@ -78,6 +97,7 @@ def _write_to_s3(stop_id: str, payload: Dict[str, Any], ts: datetime) -> str:
     envelope = {
         "fetch_timestamp": ts.isoformat(),
         "stop_id": stop_id,
+        "stop_name": stop_name,
         "api_response": payload,
     }
 
@@ -96,9 +116,11 @@ def lambda_handler(event, context):
 
     for stop_id in STOP_IDS:
         try:
-            payload = _fetch(stop_id)
-            s3_path = _write_to_s3(stop_id, payload, ts)
-            results.append({"stop_id": stop_id, "status": "success", "s3_path": s3_path})
+            stop_metadata = _fetch_stop_metadata(stop_id)
+            stop_name = _extract_stop_name(stop_metadata)
+            payload = _fetch_departures(stop_id)
+            s3_path = _write_to_s3(stop_id, stop_name, payload, ts)
+            results.append({"stop_id": stop_id, "stop_name": stop_name, "status": "success", "s3_path": s3_path})
         except Exception as exc:
             results.append({"stop_id": stop_id, "status": "failed", "error": str(exc)})
 
