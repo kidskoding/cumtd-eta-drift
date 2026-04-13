@@ -20,6 +20,10 @@ Databricks-first project for auditing how CUMTD real-time departure estimates dr
    - Notebook: `notebooks/03_analyze_departure_drift.py`
    - Produces a single-trip ETA line plot, drift histogram, and top stops/routes by average drift.
 
+4. **Verification**
+   - Notebook: `notebooks/04_verify_pipeline_health.py`
+   - Checks the raw, audit, staging, mart, and summary tables after an end-to-end run.
+
 ## Databricks Setup
 
 Import the files in `notebooks/` as Databricks source notebooks.
@@ -28,7 +32,9 @@ Recommended job order:
 
 1. Run `01_ingest_departure_snapshots.py` on a schedule, for example every 1-5 minutes during service windows.
 2. Run `02_compute_departure_drift_metrics.py` after ingestion, or as a separate batch job.
-3. Run `03_analyze_departure_drift.py` interactively or on a reporting cadence.
+3. Run dbt from the `dbt/` directory once raw ingestion is populated.
+4. Run `04_verify_pipeline_health.py` to confirm the raw rows, stop names, ETAs, and dbt models are healthy.
+5. Run `03_analyze_departure_drift.py` interactively or on a reporting cadence.
 
 There is also a Databricks Asset Bundle scaffold in `databricks.yml`. It defines a paused job that runs ingestion and then drift metric computation every five minutes. The default Unity Catalog target is `workspace.cumtd_eta_drift`; set `s3_bucket`, `s3_prefix`, and `stop_ids` for your workspace before enabling the schedule.
 
@@ -68,7 +74,7 @@ This repo is initialized with `uv`.
 
 ```bash
 uv sync
-uv run python -m py_compile notebooks/01_ingest_departure_snapshots.py notebooks/02_compute_departure_drift_metrics.py notebooks/03_analyze_departure_drift.py
+uv run python -m py_compile notebooks/01_ingest_departure_snapshots.py notebooks/02_compute_departure_drift_metrics.py notebooks/03_analyze_departure_drift.py notebooks/04_verify_pipeline_health.py
 ```
 
 The local environment is useful for dependency locking and syntax checks. The notebooks still require a Databricks runtime for `spark`, `dbutils`, Delta tables, and job execution.

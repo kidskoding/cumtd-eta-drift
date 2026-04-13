@@ -60,6 +60,16 @@ resources:
           libraries:
             - pypi:
                 package: dbt-databricks>=1.10,<2
+        - task_key: verify_pipeline_health
+          depends_on:
+            - task_key: compute_departure_drift_metrics
+          job_cluster_key: eta_drift_cluster
+          notebook_task:
+            notebook_path: notebooks/04_verify_pipeline_health.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              min_raw_rows: "1"
 
 targets:
   dev:
