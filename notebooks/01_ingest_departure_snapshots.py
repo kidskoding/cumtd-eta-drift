@@ -225,30 +225,36 @@ def iter_departures(payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     return departures
 
 
-def read_s3_snapshots(s3_base: str) -> List[Dict[str, Any]]:
-    """Read all JSON snapshot files from S3 and return parsed envelopes."""
-    try:
-        raw_df = spark.read.option("multiLine", True).json(f"{s3_base}/*/**.json")
-        if raw_df.rdd.isEmpty():
-            return []
-        return [json.loads(row.asDict(recursive=True).__str__().replace("'", '"'))
-                for row in raw_df.collect()]
-    except Exception:
-        return []
-
-
 def read_s3_snapshots_raw(s3_base: str) -> List[Dict[str, Any]]:
-    """Read JSON files from S3 using wholeTextFiles for reliable parsing."""
+    """Read JSON files from S3 — serverless compatible (no sparkContext needed)."""
     envelopes = []
     try:
-        rdd = spark.sparkContext.wholeTextFiles(f"{s3_base}/*/**.json")
-        for path, content in rdd.collect():
+        # List files using dbutils (works on serverless)
+        files = dbutils.fs.ls(s3_base)
+        json_paths = []
+        for f in files:
+            if f.isDir():
+                # Traverse date subdirectories
+                try:
+                    sub_files = dbutils.fs.ls(f.path)
+                    json_paths.extend([sf.path for sf in sub_files if sf.path.endswith(".json")])
+                except Exception:
+                    continue
+            elif f.path.endswith(".json"):
+                json_paths.append(f.path)
+
+        if not json_paths:
+            return []
+
+        # Read all JSON files as single-line text, parse each
+        text_df = spark.read.option("wholetext", True).text(json_paths)
+        for row in text_df.collect():
             try:
-                envelopes.append(json.loads(content))
-            except json.JSONDecodeError:
+                envelopes.append(json.loads(row.value))
+            except (json.JSONDecodeError, TypeError):
                 continue
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Warning: Could not read S3 snapshots: {e}")
     return envelopes
 
 # COMMAND ----------

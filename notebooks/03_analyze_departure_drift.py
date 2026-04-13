@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "1"
+# ///
 # MAGIC %md
 # MAGIC # 03 - Analyze Departure Drift
 # MAGIC
@@ -108,7 +112,7 @@ plt.show()
 # COMMAND ----------
 
 top_stops_df = (
-    metrics_df.groupBy("stop_id", "stop_name")
+    metrics_df.groupBy("stop_id")
     .avg("drift_minutes")
     .withColumnRenamed("avg(drift_minutes)", "avg_drift_minutes")
     .orderBy(desc("avg_drift_minutes"))
@@ -116,7 +120,7 @@ top_stops_df = (
 )
 
 top_routes_df = (
-    metrics_df.groupBy("route_id", "route_short_name")
+    metrics_df.groupBy("route_short_name")
     .avg("drift_minutes")
     .withColumnRenamed("avg(drift_minutes)", "avg_drift_minutes")
     .orderBy(desc("avg_drift_minutes"))
