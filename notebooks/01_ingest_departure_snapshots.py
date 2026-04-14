@@ -35,7 +35,6 @@ dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("schema", "cumtd_eta_drift")
 dbutils.widgets.text("s3_bucket", "cumtd-eta-drift")
 dbutils.widgets.text("s3_prefix", "raw-departures")
-dbutils.widgets.text("stop_ids", "IT")
 dbutils.widgets.text("lookahead_minutes", "60")
 dbutils.widgets.text("stop_name_overrides", "IT=Illinois Terminal")
 
@@ -43,12 +42,8 @@ catalog = dbutils.widgets.get("catalog").strip()
 schema_name = dbutils.widgets.get("schema").strip()
 s3_bucket = dbutils.widgets.get("s3_bucket").strip()
 s3_prefix = dbutils.widgets.get("s3_prefix").strip().strip("/")
-stop_ids = [s.strip() for s in dbutils.widgets.get("stop_ids").split(",") if s.strip()]
 lookahead_minutes = int(dbutils.widgets.get("lookahead_minutes"))
 stop_name_override_text = dbutils.widgets.get("stop_name_overrides").strip()
-
-if not stop_ids:
-    raise ValueError("Provide at least one stop_id in the stop_ids widget.")
 
 database_name = f"{catalog}.{schema_name}" if catalog else schema_name
 raw_table = f"{database_name}.raw_departure_snapshots"

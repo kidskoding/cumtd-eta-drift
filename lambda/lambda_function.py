@@ -4,11 +4,11 @@ Environment variables (set in Lambda configuration):
   CUMTD_API_KEY        – Your CUMTD developer API key
   S3_BUCKET            – Target S3 bucket name  (e.g. cumtd-eta-drift)
   S3_PREFIX            – Key prefix              (default: raw-departures)
-  STOP_IDS             – Comma-separated stop IDs (default: IT)
-  ROUTE_FILTERS        – Comma-separated route name keywords to auto-discover
-                         stops (e.g. "YELLOW,GREEN,GOLD,TEAL,SILVER,ILLINI").
-                         Stops discovered from matching routes are merged with
-                         STOP_IDS so you capture routes that don't serve IT.
+  STOP_IDS             – Comma-separated explicit stop IDs to always include
+                         (default: empty). Merged with auto-discovered stops.
+  ROUTE_FILTERS        – Comma-separated route name keywords to restrict
+                         discovery to (e.g. "YELLOW,GREEN,GOLD"). If blank
+                         or unset, ALL routes are included automatically.
   LOOKAHEAD_MINUTES    – Departure lookahead     (default: 60)
 
 S3 key layout:
@@ -34,7 +34,7 @@ API_BASE_URL = os.environ.get("CUMTD_API_BASE_URL", "https://api.mtd.dev")
 API_KEY = os.environ.get("CUMTD_API_KEY", "")
 S3_BUCKET = os.environ["S3_BUCKET"]
 S3_PREFIX = os.environ.get("S3_PREFIX", "raw-departures").strip("/")
-STOP_IDS = [s.strip() for s in os.environ.get("STOP_IDS", "IT").split(",") if s.strip()]
+STOP_IDS = [s.strip() for s in os.environ.get("STOP_IDS", "").split(",") if s.strip()]
 ROUTE_FILTERS = [
     s.strip().upper()
     for s in os.environ.get("ROUTE_FILTERS", "").split(",")
@@ -78,7 +78,7 @@ def _request_json(url: str, params: Dict[str, str] | None = None) -> Dict[str, A
 
 
 # ---------------------------------------------------------------------------
-# Stop / departure helpers (existing)
+# Stop / departure helpers
 # ---------------------------------------------------------------------------
 def _build_stop_url(stop_id: str) -> str:
     base = API_BASE_URL.rstrip("/")
@@ -140,11 +140,14 @@ def _extract_stop_metadata(stop_metadata: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Route-based stop discovery (NEW)
+# Route-based stop discovery
 # ---------------------------------------------------------------------------
-def _discover_stops_for_routes(route_filters: List[str]) -> Set[str]:
-    """Query the CUMTD API for routes matching *route_filters* keywords,
-    then return the set of group-level stop IDs those routes serve.
+def _discover_stops() -> Set[str]:
+    """Discover stop IDs by querying the CUMTD routes API.
+
+    If ROUTE_FILTERS is set, only routes whose name contains one of the
+    keywords are included.  If ROUTE_FILTERS is empty, ALL routes are
+    included (default — captures every bus in the system).
 
     Uses REST endpoints:
       GET /routes              -> list all routes
@@ -155,10 +158,6 @@ def _discover_stops_for_routes(route_filters: List[str]) -> Set[str]:
     if _cache_populated:
         return _route_stops_cache
 
-    if not route_filters:
-        _cache_populated = True
-        return _route_stops_cache
-
     base = API_BASE_URL.rstrip("/")
     discovered: Set[str] = set()
 
@@ -167,7 +166,7 @@ def _discover_stops_for_routes(route_filters: List[str]) -> Set[str]:
         routes_data = _request_json(f"{base}/routes")
         routes_list = _extract_list(routes_data)
 
-        # 2. Filter by name keywords
+        # 2. Filter by keywords (or include all if no filters set)
         matching = []
         for route in routes_list:
             if not isinstance(route, dict):
@@ -177,12 +176,18 @@ def _discover_stops_for_routes(route_filters: List[str]) -> Set[str]:
             route_id = _get_str(route, ["route_id", "id"])
             if not route_id:
                 continue
-            for kw in route_filters:
-                if kw in name:
-                    matching.append({"id": route_id, "name": name})
-                    break
 
-        print(f"[route-discovery] Matched {len(matching)} routes: "
+            if not ROUTE_FILTERS:
+                # No filters → include every route
+                matching.append({"id": route_id, "name": name})
+            else:
+                for kw in ROUTE_FILTERS:
+                    if kw in name:
+                        matching.append({"id": route_id, "name": name})
+                        break
+
+        print(f"[route-discovery] Matched {len(matching)} routes "
+              f"(filters={ROUTE_FILTERS or 'ALL'}): "
               f"{[m['name'] for m in matching]}")
 
         # 3. For each matched route, discover its stops
@@ -222,7 +227,6 @@ def _extract_list(data: Dict[str, Any]) -> list:
         val = data.get(key)
         if isinstance(val, list):
             return val
-    # Might be a dict-of-dicts
     for key in ("result", "results", "routes", "stops", "data"):
         val = data.get(key)
         if isinstance(val, dict):
@@ -272,13 +276,22 @@ def lambda_handler(event, context):
     ts = datetime.now(timezone.utc)
     results = []
 
-    # Merge explicit stop IDs with route-discovered stops
+    # Discover stops from routes, merge with any explicit STOP_IDS
     all_stop_ids = list(STOP_IDS)
-    if ROUTE_FILTERS:
-        discovered = _discover_stops_for_routes(ROUTE_FILTERS)
-        for sid in discovered:
-            if sid not in all_stop_ids:
-                all_stop_ids.append(sid)
+    discovered = _discover_stops()
+    for sid in discovered:
+        if sid not in all_stop_ids:
+            all_stop_ids.append(sid)
+
+    if not all_stop_ids:
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                {"timestamp": ts.isoformat(),
+                 "error": "No stops discovered. Check API connectivity."},
+                default=str,
+            ),
+        }
 
     print(f"[lambda] Polling {len(all_stop_ids)} stops: {all_stop_ids}")
 
