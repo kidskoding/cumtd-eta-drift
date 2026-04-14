@@ -32,6 +32,7 @@ aws lambda create-function \
     S3_BUCKET=cumtd-eta-drift,
     S3_PREFIX=raw-departures,
     STOP_IDS=IT,
+    ROUTE_FILTERS=YELLOW,GREEN,GOLD,TEAL,SILVER,ILLINI,
     LOOKAHEAD_MINUTES=60
   }"
 ```
@@ -80,6 +81,22 @@ CREATE EXTERNAL LOCATION cumtd_s3
 
 Or use an existing IAM instance profile / storage credential that has read access to the bucket.
 
+## Route-Based Stop Discovery
+
+The Lambda can automatically discover which stops to poll based on route names. Set `ROUTE_FILTERS` to a comma-separated list of route name keywords:
+
+```
+ROUTE_FILTERS=YELLOW,GREEN,GOLD,TEAL,SILVER,ILLINI
+```
+
+On each invocation the Lambda will:
+1. Call `GET /routes` to list all CUMTD routes
+2. Filter to routes whose name contains any of your keywords (e.g. "1N YELLOW", "10E GOLD")
+3. Call `GET /routes/{id}/stops` for each match to discover stop IDs
+4. Merge discovered stops with `STOP_IDS` and poll departures from all of them
+
+This means you don't need to manually look up stop IDs for every route — just set the route color names and the Lambda figures out the rest. Results are cached across warm invocations to minimize API calls.
+
 ## S3 Key Layout
 
 ```
@@ -87,6 +104,7 @@ s3://cumtd-eta-drift/raw-departures/
   2026-04-13/
     12-00-00_IT.json
     12-02-00_IT.json
+    12-00-00_PAR.json
     ...
   2026-04-14/
     ...
@@ -177,7 +195,8 @@ Permissions policy:
 | `CUMTD_API_BASE_URL` | No | `https://api.mtd.dev` | MTD Developer API base URL |
 | `S3_BUCKET` | Yes | — | Target S3 bucket |
 | `S3_PREFIX` | No | `raw-departures` | S3 key prefix |
-| `STOP_IDS` | No | `IT` | Comma-separated stop IDs |
+| `STOP_IDS` | No | `IT` | Comma-separated stop IDs to always poll |
+| `ROUTE_FILTERS` | No | — | Comma-separated route name keywords (e.g. `YELLOW,GREEN,GOLD,TEAL,SILVER,ILLINI`). Auto-discovers stops for matching routes. |
 | `LOOKAHEAD_MINUTES` | No | `60` | Departure lookahead window |
 | `MAX_RETRIES` | No | `3` | API retry attempts |
 | `REQUEST_TIMEOUT_SECONDS` | No | `10` | HTTP timeout |

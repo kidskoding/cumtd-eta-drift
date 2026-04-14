@@ -5,6 +5,10 @@ Environment variables (set in Lambda configuration):
   S3_BUCKET            – Target S3 bucket name  (e.g. cumtd-eta-drift)
   S3_PREFIX            – Key prefix              (default: raw-departures)
   STOP_IDS             – Comma-separated stop IDs (default: IT)
+  ROUTE_FILTERS        – Comma-separated route name keywords to auto-discover
+                         stops (e.g. "YELLOW,GREEN,GOLD,TEAL,SILVER,ILLINI").
+                         Stops discovered from matching routes are merged with
+                         STOP_IDS so you capture routes that don't serve IT.
   LOOKAHEAD_MINUTES    – Departure lookahead     (default: 60)
 
 S3 key layout:
@@ -17,7 +21,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List, Set
 from urllib.parse import quote, urlencode
 
 import boto3
@@ -31,6 +35,11 @@ API_KEY = os.environ.get("CUMTD_API_KEY", "")
 S3_BUCKET = os.environ["S3_BUCKET"]
 S3_PREFIX = os.environ.get("S3_PREFIX", "raw-departures").strip("/")
 STOP_IDS = [s.strip() for s in os.environ.get("STOP_IDS", "IT").split(",") if s.strip()]
+ROUTE_FILTERS = [
+    s.strip().upper()
+    for s in os.environ.get("ROUTE_FILTERS", "").split(",")
+    if s.strip()
+]
 LOOKAHEAD_MINUTES = int(os.environ.get("LOOKAHEAD_MINUTES", "60"))
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
 REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "10"))
@@ -38,17 +47,14 @@ REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "10"))
 http = urllib3.PoolManager(timeout=urllib3.Timeout(total=REQUEST_TIMEOUT))
 s3 = boto3.client("s3")
 
-
-def _build_stop_url(stop_id: str) -> str:
-    base = API_BASE_URL.rstrip("/")
-    encoded_stop_id = quote(stop_id, safe="")
-    return f"{base}/stops/{encoded_stop_id}"
+# Cache discovered stops across warm Lambda invocations
+_route_stops_cache: Set[str] = set()
+_cache_populated = False
 
 
-def _build_departures_url(stop_id: str) -> str:
-    return f"{_build_stop_url(stop_id)}/departures"
-
-
+# ---------------------------------------------------------------------------
+# HTTP helpers
+# ---------------------------------------------------------------------------
 def _request_json(url: str, params: Dict[str, str] | None = None) -> Dict[str, Any]:
     query = f"?{urlencode(params)}" if params else ""
     full_url = f"{url}{query}"
@@ -60,7 +66,7 @@ def _request_json(url: str, params: Dict[str, str] | None = None) -> Dict[str, A
             resp = http.request("GET", full_url, headers=headers)
             if resp.status == 200:
                 return json.loads(resp.data.decode("utf-8"))
-            last_err = RuntimeError(f"HTTP {resp.status}: {resp.data[:200]}")
+            last_err = RuntimeError(f"HTTP {resp.status}: {resp.data[:300]}")
         except Exception as exc:
             last_err = exc
         if attempt < MAX_RETRIES:
@@ -69,6 +75,19 @@ def _request_json(url: str, params: Dict[str, str] | None = None) -> Dict[str, A
     raise RuntimeError(
         f"Failed to fetch {full_url} after {MAX_RETRIES} attempts: {last_err}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Stop / departure helpers (existing)
+# ---------------------------------------------------------------------------
+def _build_stop_url(stop_id: str) -> str:
+    base = API_BASE_URL.rstrip("/")
+    encoded_stop_id = quote(stop_id, safe="")
+    return f"{base}/stops/{encoded_stop_id}"
+
+
+def _build_departures_url(stop_id: str) -> str:
+    return f"{_build_stop_url(stop_id)}/departures"
 
 
 def _fetch_departures(stop_id: str) -> Dict[str, Any]:
@@ -120,7 +139,111 @@ def _extract_stop_metadata(stop_metadata: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _write_to_s3(stop_id: str, stop_metadata: Dict[str, Any], payload: Dict[str, Any], ts: datetime) -> str:
+# ---------------------------------------------------------------------------
+# Route-based stop discovery (NEW)
+# ---------------------------------------------------------------------------
+def _discover_stops_for_routes(route_filters: List[str]) -> Set[str]:
+    """Query the CUMTD API for routes matching *route_filters* keywords,
+    then return the set of group-level stop IDs those routes serve.
+
+    Uses REST endpoints:
+      GET /routes              -> list all routes
+      GET /routes/{id}/stops   -> stops served by a route
+    """
+    global _route_stops_cache, _cache_populated
+
+    if _cache_populated:
+        return _route_stops_cache
+
+    if not route_filters:
+        _cache_populated = True
+        return _route_stops_cache
+
+    base = API_BASE_URL.rstrip("/")
+    discovered: Set[str] = set()
+
+    try:
+        # 1. List all routes
+        routes_data = _request_json(f"{base}/routes")
+        routes_list = _extract_list(routes_data)
+
+        # 2. Filter by name keywords
+        matching = []
+        for route in routes_list:
+            if not isinstance(route, dict):
+                continue
+            name = _get_str(route, ["route_short_name", "shortName",
+                                    "short_name", "name"]).upper()
+            route_id = _get_str(route, ["route_id", "id"])
+            if not route_id:
+                continue
+            for kw in route_filters:
+                if kw in name:
+                    matching.append({"id": route_id, "name": name})
+                    break
+
+        print(f"[route-discovery] Matched {len(matching)} routes: "
+              f"{[m['name'] for m in matching]}")
+
+        # 3. For each matched route, discover its stops
+        for m in matching:
+            try:
+                encoded = quote(m["id"], safe="")
+                stops_data = _request_json(f"{base}/routes/{encoded}/stops")
+                stops_list = _extract_list(stops_data)
+
+                for stop in stops_list:
+                    if not isinstance(stop, dict):
+                        continue
+                    sid = _get_str(stop, ["stop_id", "id"])
+                    if sid:
+                        # Use group-level ID (strip boarding-point suffix)
+                        group_id = sid.split(":")[0] if ":" in sid else sid
+                        discovered.add(group_id)
+            except Exception as exc:
+                print(f"[route-discovery] Could not get stops for "
+                      f"{m['name']} ({m['id']}): {exc}")
+
+        print(f"[route-discovery] Discovered {len(discovered)} unique stop "
+              f"groups: {sorted(discovered)}")
+
+    except Exception as exc:
+        print(f"[route-discovery] Failed to fetch routes list: {exc}")
+
+    _route_stops_cache = discovered
+    _cache_populated = True
+    return discovered
+
+
+def _extract_list(data: Dict[str, Any]) -> list:
+    """Pull the list of items from an API response, tolerating several
+    common envelope shapes."""
+    for key in ("result", "results", "routes", "stops", "data"):
+        val = data.get(key)
+        if isinstance(val, list):
+            return val
+    # Might be a dict-of-dicts
+    for key in ("result", "results", "routes", "stops", "data"):
+        val = data.get(key)
+        if isinstance(val, dict):
+            return list(val.values())
+    return []
+
+
+def _get_str(obj: dict, keys: list) -> str:
+    """Return the first non-empty string value for the given keys."""
+    for k in keys:
+        v = obj.get(k)
+        if v:
+            return str(v)
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# S3 writer
+# ---------------------------------------------------------------------------
+def _write_to_s3(stop_id: str, stop_metadata: Dict[str, Any],
+                 payload: Dict[str, Any], ts: datetime) -> str:
     date_part = ts.strftime("%Y-%m-%d")
     time_part = ts.strftime("%H-%M-%S")
     key = f"{S3_PREFIX}/{date_part}/{time_part}_{stop_id}.json"
@@ -142,11 +265,24 @@ def _write_to_s3(stop_id: str, stop_metadata: Dict[str, Any], payload: Dict[str,
     return f"s3://{S3_BUCKET}/{key}"
 
 
+# ---------------------------------------------------------------------------
+# Lambda entry point
+# ---------------------------------------------------------------------------
 def lambda_handler(event, context):
     ts = datetime.now(timezone.utc)
     results = []
 
-    for stop_id in STOP_IDS:
+    # Merge explicit stop IDs with route-discovered stops
+    all_stop_ids = list(STOP_IDS)
+    if ROUTE_FILTERS:
+        discovered = _discover_stops_for_routes(ROUTE_FILTERS)
+        for sid in discovered:
+            if sid not in all_stop_ids:
+                all_stop_ids.append(sid)
+
+    print(f"[lambda] Polling {len(all_stop_ids)} stops: {all_stop_ids}")
+
+    for stop_id in all_stop_ids:
         try:
             stop_metadata = _extract_stop_metadata(_fetch_stop_metadata(stop_id))
             payload = _fetch_departures(stop_id)
@@ -160,7 +296,8 @@ def lambda_handler(event, context):
                 }
             )
         except Exception as exc:
-            results.append({"stop_id": stop_id, "status": "failed", "error": str(exc)})
+            results.append({"stop_id": stop_id, "status": "failed",
+                            "error": str(exc)})
 
     return {
         "statusCode": 200,

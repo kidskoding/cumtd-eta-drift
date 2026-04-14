@@ -205,64 +205,87 @@ plt.show()
 
 # COMMAND ----------
 
-# --- Chart 3: Route Ranking by Avg Drift ---
+# --- Chart 3: Route Ranking by Avg Drift (Student Routes Only) ---
+import re
+from pyspark.sql.functions import udf, avg as spark_avg
+from pyspark.sql.types import StringType
+
 BG = "#fafbfc"
 GRID = "#e5e7eb"
 
-top_routes_pdf = (
-    metrics_df.groupBy("route_short_name")
-    .avg("drift_minutes")
-    .withColumnRenamed("avg(drift_minutes)", "avg_drift_minutes")
-    .orderBy("avg_drift_minutes")
+# Map route number prefix → display name + color
+STUDENT_ROUTES = {
+    "1":  {"name": "1 YELLOW",  "color": "#facc15"},
+    "5":  {"name": "5 GREEN",   "color": "#22c55e"},
+    "10": {"name": "10 GOLD",   "color": "#f59e0b"},
+    "12": {"name": "12 TEAL",   "color": "#14b8a6"},
+    "13": {"name": "13 SILVER", "color": "#94a3b8"},
+    "22": {"name": "22 ILLINI", "color": "#f97316"},
+}
+
+def extract_route_number(name):
+    if name is None:
+        return None
+    m = re.match(r"^(\d+)", name)
+    return m.group(1) if m else None
+
+extract_udf = udf(extract_route_number, StringType())
+
+# Extract route number, filter to student routes, group
+route_nums = list(STUDENT_ROUTES.keys())
+routes_pdf = (
+    metrics_df
+    .withColumn("route_num", extract_udf(col("route_short_name")))
+    .where(col("route_num").isin(route_nums))
+    .groupBy("route_num")
+    .agg(spark_avg("drift_minutes").alias("avg_drift_minutes"))
     .toPandas()
 )
 
-if top_routes_pdf.empty:
-    raise ValueError("No route drift data available.")
+# Add display names and sort
+routes_pdf["avg_drift_minutes"] = routes_pdf["avg_drift_minutes"].astype(float)
+routes_pdf["display_name"] = routes_pdf["route_num"].map(lambda x: STUDENT_ROUTES[x]["name"])
+routes_pdf["bar_color"] = routes_pdf["route_num"].map(lambda x: STUDENT_ROUTES[x]["color"])
+routes_pdf = routes_pdf.sort_values("avg_drift_minutes", ascending=True)
 
-# Sort for horizontal bar (top routes at top)
-top_routes_pdf = top_routes_pdf.sort_values("avg_drift_minutes", ascending=True)
+if routes_pdf.empty:
+    print("No student route data yet — collect more snapshots.")
+else:
+    fig, ax = plt.subplots(figsize=(13, max(4, len(routes_pdf) * 0.8)), dpi=120)
+    fig.patch.set_facecolor(BG)
+    ax.set_facecolor(BG)
 
-fig, ax = plt.subplots(figsize=(13, max(6, len(top_routes_pdf) * 0.4)), dpi=120)
-fig.patch.set_facecolor(BG)
-ax.set_facecolor(BG)
-
-# Color gradient: low drift = green, high drift = red
-values = top_routes_pdf["avg_drift_minutes"].values
-norm = plt.Normalize(values.min(), values.max())
-cmap = LinearSegmentedColormap.from_list("", ["#10b981", "#f59e0b", "#ef4444"])
-colors = [cmap(norm(v)) for v in values]
-
-bars = ax.barh(
-    top_routes_pdf["route_short_name"], values,
-    color=colors, edgecolor="white", linewidth=0.8, height=0.7,
-)
-
-# Value labels on bars
-for bar, val in zip(bars, values):
-    ax.text(
-        bar.get_width() + 0.1, bar.get_y() + bar.get_height() / 2,
-        f"{val:.1f} min",
-        va="center", ha="left", fontsize=10, color="#4b5563", fontweight="medium",
+    bars = ax.barh(
+        routes_pdf["display_name"], routes_pdf["avg_drift_minutes"],
+        color=routes_pdf["bar_color"], edgecolor="white", linewidth=1.2, height=0.6,
     )
 
-# Styling
-ax.set_xlabel("Average ETA Drift (minutes)", fontsize=13, fontweight="medium", labelpad=12)
-ax.set_title(
-    "Which CUMTD Routes Have the Most Unreliable ETAs?",
-    fontsize=17, fontweight="bold", pad=18, color="#1f2937",
-)
-ax.tick_params(labelsize=11, colors="#4b5563")
-for spine in ax.spines.values():
-    spine.set_visible(False)
-ax.grid(True, axis="x", alpha=0.5, color=GRID, linewidth=0.8)
+    for bar, val in zip(bars, routes_pdf["avg_drift_minutes"]):
+        ax.text(
+            bar.get_width() + 0.15, bar.get_y() + bar.get_height() / 2,
+            f"{val:.1f} min",
+            va="center", ha="left", fontsize=12, color="#4b5563", fontweight="bold",
+        )
 
-# Extend x-axis slightly for labels
-ax.set_xlim(0, values.max() * 1.2)
+    ax.set_xlabel("Average ETA Drift (minutes)", fontsize=13, fontweight="medium", labelpad=12)
+    ax.set_title(
+        "ETA Reliability of Popular CUMTD Student Routes",
+        fontsize=17, fontweight="bold", pad=18, color="#1f2937",
+    )
+    ax.tick_params(labelsize=12, colors="#4b5563")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.grid(True, axis="x", alpha=0.5, color=GRID, linewidth=0.8)
+    ax.set_xlim(0, routes_pdf["avg_drift_minutes"].max() * 1.3)
 
-fig.text(0.5, -0.01,
-    f"Green = reliable  ·  Red = frequently delayed  ·  Based on {metrics_df.count()} trip observations",
-    ha="center", fontsize=10, color="#6b7280", style="italic")
+    # Note which routes are missing
+    found = set(routes_pdf["route_num"].tolist())
+    missing = [STUDENT_ROUTES[k]["name"] for k in route_nums if k not in found]
+    subtitle = f"Bars use each route's official color  ·  Based on real-time snapshots at Illinois Terminal"
+    if missing:
+        subtitle += f"\n{', '.join(missing)} — not yet observed (need more collection time)"
 
-plt.tight_layout()
-plt.show()
+    fig.text(0.5, -0.02, subtitle, ha="center", fontsize=10, color="#6b7280", style="italic")
+
+    plt.tight_layout()
+    plt.show()
