@@ -181,7 +181,7 @@ if not route_pdf.empty:
 
 stop_eda_df = (
     metrics_df.where(col("stop_id").isNotNull())
-    .groupBy("stop_id", "stop_display_name", "stop_name")
+    .groupBy("stop_id", "stop_name")
     .agg(
         spark_count("*").alias("observed_trips"),
         spark_avg("drift_minutes").alias("avg_drift_minutes"),
@@ -229,7 +229,7 @@ if not featured:
     featured = metrics_df.orderBy(desc("drift_minutes"), desc("update_count")).first()
 
 featured_route_name = featured["route_short_name"] or "Unknown route"
-featured_stop_name = featured["stop_display_name"] or featured["stop_name"] or featured["stop_id"]
+featured_stop_name = featured["stop_name"] or featured["stop_id"]
 
 trip_pdf = (
     raw_df.where(col("trip_id") == featured["trip_id"])

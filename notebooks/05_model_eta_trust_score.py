@@ -16,13 +16,14 @@
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
-from pyspark.ml import Pipeline
-from pyspark.ml.classification import GBTClassifier
-from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
-from pyspark.ml.feature import OneHotEncoder, StringIndexer, VectorAssembler
-from pyspark.ml.functions import vector_to_array
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OrdinalEncoder, StandardScaler
 from pyspark.sql.functions import (
     abs as spark_abs,
     col,
@@ -145,43 +146,36 @@ numeric_features = [
     "day_of_week",
     "snapshot_number",
 ]
+all_features = numeric_features + categorical_features
+TARGET = "will_shift_3plus_minutes"
 
-indexers = [
-    StringIndexer(inputCol=feature, outputCol=f"{feature}_idx", handleInvalid="keep")
-    for feature in categorical_features
-]
-encoder = OneHotEncoder(
-    inputCols=[f"{feature}_idx" for feature in categorical_features],
-    outputCols=[f"{feature}_ohe" for feature in categorical_features],
+# Convert to pandas for sklearn
+train_pdf = model_df.select(all_features + [TARGET]).toPandas()
+train_pdf[TARGET] = train_pdf[TARGET].astype(int)
+
+X = train_pdf[all_features]
+y = train_pdf[TARGET]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+
+preprocessor = ColumnTransformer([
+    ("num", StandardScaler(), numeric_features),
+    ("cat", OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1), categorical_features),
+])
+
+clf = GradientBoostingClassifier(
+    n_estimators=200, max_depth=4, learning_rate=0.1, subsample=0.8, random_state=42,
 )
-assembler = VectorAssembler(
-    inputCols=numeric_features + [f"{feature}_ohe" for feature in categorical_features],
-    outputCol="features",
-)
-classifier = GBTClassifier(
-    labelCol="will_shift_3plus_minutes",
-    featuresCol="features",
-    maxIter=40,
-    maxDepth=4,
-    seed=42,
-)
 
-pipeline = Pipeline(stages=indexers + [encoder, assembler, classifier])
-train_df, test_df = model_df.randomSplit([0.75, 0.25], seed=42)
+X_train_t = preprocessor.fit_transform(X_train)
+X_test_t = preprocessor.transform(X_test)
 
-model = pipeline.fit(train_df)
-predictions = model.transform(test_df).cache()
+clf.fit(X_train_t, y_train)
+y_pred = clf.predict(X_test_t)
+y_prob = clf.predict_proba(X_test_t)[:, 1]
 
-auc = BinaryClassificationEvaluator(
-    labelCol="will_shift_3plus_minutes",
-    rawPredictionCol="rawPrediction",
-    metricName="areaUnderROC",
-).evaluate(predictions)
-accuracy = MulticlassClassificationEvaluator(
-    labelCol="will_shift_3plus_minutes",
-    predictionCol="prediction",
-    metricName="accuracy",
-).evaluate(predictions)
+auc = roc_auc_score(y_test, y_prob)
+accuracy = accuracy_score(y_test, y_pred)
 
 print(f"AUC: {auc:.3f}")
 print(f"Accuracy: {accuracy:.3f}")
@@ -193,7 +187,7 @@ displayHTML(
     <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:12px 0 18px 0;">
       <div style="border:1px solid #e5e7eb;border-radius:8px;padding:16px;background:#fff;">
         <div style="font-size:13px;color:#6b7280;">Prediction Target</div>
-        <div style="font-size:23px;font-weight:800;color:#111827;margin-top:8px;">ETA shifts ≥ {shift_threshold_minutes:.0f} min</div>
+        <div style="font-size:23px;font-weight:800;color:#111827;margin-top:8px;">ETA shifts \u2265 {shift_threshold_minutes:.0f} min</div>
         <div style="font-size:12px;color:#6b7280;margin-top:8px;">before the final observed ETA</div>
       </div>
       <div style="border:1px solid #e5e7eb;border-radius:8px;padding:16px;background:#fff;">
@@ -217,18 +211,10 @@ displayHTML(
 
 # COMMAND ----------
 
-confusion_pdf = (
-    predictions.groupBy("will_shift_3plus_minutes", "prediction")
-    .agg(spark_count("*").alias("rows"))
-    .toPandas()
-)
-
-confusion = np.zeros((2, 2), dtype=int)
-for _, row in confusion_pdf.iterrows():
-    confusion[int(row["will_shift_3plus_minutes"]), int(row["prediction"])] = int(row["rows"])
+cm = confusion_matrix(y_test, y_pred)
 
 fig, ax = plt.subplots(figsize=(6.5, 5.5), dpi=140)
-im = ax.imshow(confusion, cmap="Blues")
+im = ax.imshow(cm, cmap="Blues")
 ax.set_xticks([0, 1])
 ax.set_xticklabels(["Pred stable", "Pred shaky"])
 ax.set_yticks([0, 1])
@@ -236,7 +222,7 @@ ax.set_yticklabels(["Actually stable", "Actually shaky"])
 ax.set_title("ETA Trust Model Confusion Matrix", fontsize=16, fontweight="bold", loc="left", pad=14)
 for i in range(2):
     for j in range(2):
-        ax.text(j, i, f"{confusion[i, j]:,}", ha="center", va="center", fontsize=14, fontweight="bold")
+        ax.text(j, i, f"{cm[i, j]:,}", ha="center", va="center", fontsize=14, fontweight="bold")
 for spine in ax.spines.values():
     spine.set_visible(False)
 fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
@@ -245,15 +231,10 @@ plt.show()
 
 # COMMAND ----------
 
-gbt_model = model.stages[-1]
-attrs = predictions.schema["features"].metadata.get("ml_attr", {}).get("attrs", {})
-feature_names = []
-for attr_group in attrs.values():
-    feature_names.extend([item["name"] for item in attr_group])
-
-importances = gbt_model.featureImportances.toArray()
+feature_names = numeric_features + categorical_features
+importances = clf.feature_importances_
 importance_pdf = (
-    pd.DataFrame({"feature": feature_names[: len(importances)], "importance": importances})
+    pd.DataFrame({"feature": feature_names, "importance": importances})
     .sort_values("importance", ascending=False)
     .head(12)
     .sort_values("importance", ascending=True)
@@ -263,12 +244,9 @@ fig, ax = plt.subplots(figsize=(11, 5.5), dpi=140)
 ax.barh(importance_pdf["feature"], importance_pdf["importance"], color="#2563eb")
 ax.set_title("What Drives ETA Trust Risk?", fontsize=18, fontweight="bold", loc="left", pad=14)
 ax.text(
-    0,
-    1.04,
+    0, 1.04,
     "Feature importance from the Gradient Boosted Trees model.",
-    transform=ax.transAxes,
-    fontsize=11,
-    color="#6b7280",
+    transform=ax.transAxes, fontsize=11, color="#6b7280",
 )
 ax.tick_params(labelsize=9, colors="#374151", length=0)
 for spine in ax.spines.values():
@@ -279,50 +257,49 @@ plt.show()
 
 # COMMAND ----------
 
-scored_df = (
-    predictions.withColumn("probability_array", vector_to_array("probability"))
-    .withColumn("shaky_eta_probability", col("probability_array")[1])
-    .withColumn("eta_trust_score", expr("cast(round(100 - shaky_eta_probability * 100, 0) as int)"))
-)
+# Score the test set with trust scores
+scored_pdf = X_test.copy()
+scored_pdf["shaky_eta_probability"] = y_prob
+scored_pdf["eta_trust_score"] = (100 - y_prob * 100).round(0).astype(int)
+scored_pdf["prediction"] = y_pred
+scored_pdf["actual"] = y_test.values
 
-route_model_summary = (
-    scored_df.groupBy("route_short_name")
+route_model_pdf = (
+    scored_pdf.groupby("route_short_name")
     .agg(
-        spark_count("*").alias("scored_snapshots"),
-        expr("round(avg(shaky_eta_probability), 3)").alias("avg_shaky_eta_probability"),
-        expr("round(avg(eta_trust_score), 1)").alias("avg_eta_trust_score"),
-        expr("round(avg(remaining_eta_shift_minutes), 2)").alias("avg_future_eta_shift_minutes"),
+        scored_snapshots=("shaky_eta_probability", "count"),
+        avg_shaky_eta_probability=("shaky_eta_probability", "mean"),
+        avg_eta_trust_score=("eta_trust_score", "mean"),
     )
-    .orderBy(desc("avg_shaky_eta_probability"))
+    .round(3)
+    .sort_values("avg_shaky_eta_probability", ascending=False)
+    .reset_index()
 )
 
-display(route_model_summary)
+display(spark.createDataFrame(route_model_pdf))
 
 # COMMAND ----------
 
-route_model_pdf = route_model_summary.limit(15).toPandas()
 if route_model_pdf.empty:
     print("No route-level model scores available.")
 else:
-    route_model_pdf = route_model_pdf.sort_values("avg_shaky_eta_probability", ascending=True)
-    fig, ax = plt.subplots(figsize=(12, max(4, len(route_model_pdf) * 0.48)), dpi=140)
+    plot_pdf = route_model_pdf.head(15).sort_values("avg_shaky_eta_probability", ascending=True)
+    fig, ax = plt.subplots(figsize=(12, max(4, len(plot_pdf) * 0.48)), dpi=140)
     colors = [
         "#16a34a" if score >= 75 else "#f59e0b" if score >= 50 else "#ef4444"
-        for score in route_model_pdf["avg_eta_trust_score"]
+        for score in plot_pdf["avg_eta_trust_score"]
     ]
-    ax.barh(route_model_pdf["route_short_name"], route_model_pdf["avg_eta_trust_score"], color=colors)
-    for patch, prob in zip(ax.patches, route_model_pdf["avg_shaky_eta_probability"]):
+    ax.barh(plot_pdf["route_short_name"], plot_pdf["avg_eta_trust_score"], color=colors)
+    for patch, prob in zip(ax.patches, plot_pdf["avg_shaky_eta_probability"]):
         width = patch.get_width()
-        ax.text(width + 1, patch.get_y() + patch.get_height() / 2, f"{width:.0f}/100  ·  shaky prob {prob:.2f}", va="center", fontsize=9)
+        ax.text(width + 1, patch.get_y() + patch.get_height() / 2,
+                f"{width:.0f}/100  \u00b7  shaky prob {prob:.2f}", va="center", fontsize=9)
     ax.set_xlim(0, 110)
     ax.set_title("Model-Based ETA Trust Score by Route", fontsize=18, fontweight="bold", loc="left", pad=14)
     ax.text(
-        0,
-        1.04,
+        0, 1.04,
         "Higher score means the model expects less future ETA movement from the current snapshot.",
-        transform=ax.transAxes,
-        fontsize=11,
-        color="#6b7280",
+        transform=ax.transAxes, fontsize=11, color="#6b7280",
     )
     ax.tick_params(labelsize=9, colors="#374151", length=0)
     for spine in ax.spines.values():
