@@ -16,9 +16,9 @@ Databricks-first project for auditing how CUMTD real-time departure estimates dr
    - Writes Delta table `departure_drift_metrics`.
    - dbt scaffold: `dbt/` contains the preferred production transformation path once raw ingestion is verified.
 
-3. **ETA Trust Analysis + Visualization**
-   - Notebook: `notebooks/03_analyze_departure_drift.py`
-   - Produces a visual student-facing dashboard: route trust rankings, suggested buffers, stop/platform volatility, drift distribution, route-stop heatmap, and one-trip ETA lifecycle.
+3. **Exploratory Data Analysis**
+   - Notebook: `notebooks/03_explore_eta_drift.py`
+   - Explores row counts, route/stop coverage, drift distribution, route-level drift, stop-level drift, and one repeated trip lifecycle.
 
 4. **Verification**
    - Notebook: `notebooks/04_verify_pipeline_health.py`
@@ -28,6 +28,10 @@ Databricks-first project for auditing how CUMTD real-time departure estimates dr
    - Notebook: `notebooks/05_model_eta_trust_score.py`
    - Trains a Spark ML model to predict whether the current ETA is likely to keep shifting by 3+ minutes before the final observed ETA.
    - This is a confidence model, not an actual-arrival prediction model.
+
+6. **Student-Facing ETA Trust Dashboard**
+   - Notebook: `notebooks/06_eta_trust_dashboard.py`
+   - Turns drift metrics into route trust scores, suggested buffers, stop/platform warnings, and a route-stop heatmap.
 
 ## Databricks Setup
 
@@ -39,8 +43,9 @@ Recommended job order:
 2. Run `02_compute_departure_drift_metrics.py` after ingestion, or as a separate batch job.
 3. Run dbt from the `dbt/` directory once raw ingestion is populated.
 4. Run `04_verify_pipeline_health.py` to confirm the raw rows, stop names, ETAs, and dbt models are healthy.
-5. Run `03_analyze_departure_drift.py` interactively or on a reporting cadence.
-6. Run `05_model_eta_trust_score.py` once you have enough repeated snapshots to train the confidence model.
+5. Run `03_explore_eta_drift.py` to sanity-check coverage and drift distributions.
+6. Run `06_eta_trust_dashboard.py` for blog/LinkedIn visuals and student-facing recommendations.
+7. Run `05_model_eta_trust_score.py` once you have enough repeated snapshots to train the confidence model.
 
 There is also a Databricks Asset Bundle scaffold in `databricks.yml`. It defines a paused job that runs ingestion and then drift metric computation every five minutes. The default Unity Catalog target is `workspace.cumtd_eta_drift`; set `s3_bucket`, `s3_prefix`, and `stop_ids` for your workspace before enabling the schedule.
 
@@ -80,7 +85,7 @@ This repo is initialized with `uv`.
 
 ```bash
 uv sync
-uv run python -m py_compile notebooks/01_ingest_departure_snapshots.py notebooks/02_compute_departure_drift_metrics.py notebooks/03_analyze_departure_drift.py notebooks/04_verify_pipeline_health.py notebooks/05_model_eta_trust_score.py
+uv run python -m py_compile notebooks/01_ingest_departure_snapshots.py notebooks/02_compute_departure_drift_metrics.py notebooks/03_explore_eta_drift.py notebooks/04_verify_pipeline_health.py notebooks/05_model_eta_trust_score.py notebooks/06_eta_trust_dashboard.py notebooks/eta_analysis_utils.py
 ```
 
 The local environment is useful for dependency locking and syntax checks. The notebooks still require a Databricks runtime for `spark`, `dbutils`, Delta tables, and job execution.
