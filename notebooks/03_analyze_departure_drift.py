@@ -3,10 +3,11 @@
 # [tool.databricks.environment]
 # environment_version = "1"
 # ///
+# DBTITLE 1,Cell 1
 # MAGIC %md
 # MAGIC # 03 - Analyze Departure Drift
 # MAGIC
-# MAGIC Visualize ETA instability from the `raw_departure_snapshots` and `departure_drift_metrics` Delta tables.
+# MAGIC Visualize ETA instability across **all buses and stops** from the `raw_departure_snapshots` and `departure_drift_metrics` Delta tables.
 
 # COMMAND ----------
 
@@ -16,16 +17,20 @@ from pyspark.sql.functions import col, desc
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 3
+# Remove legacy single-stop widgets if they exist
+for w in ["trip_id", "stop_id"]:
+    try:
+        dbutils.widgets.remove(w)
+    except Exception:
+        pass
+
 dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("schema", "cumtd_eta_drift")
-dbutils.widgets.text("trip_id", "")
-dbutils.widgets.text("stop_id", "")
 dbutils.widgets.text("top_n", "20")
 
 catalog = dbutils.widgets.get("catalog").strip()
 schema_name = dbutils.widgets.get("schema").strip()
-selected_trip_id = dbutils.widgets.get("trip_id").strip()
-selected_stop_id = dbutils.widgets.get("stop_id").strip()
 top_n = int(dbutils.widgets.get("top_n"))
 
 database_name = f"{catalog}.{schema_name}" if catalog else schema_name
@@ -41,108 +46,172 @@ display(metrics_df.orderBy(desc("drift_minutes"), desc("update_count")).limit(to
 
 # COMMAND ----------
 
-if not selected_trip_id or not selected_stop_id:
-    candidate = metrics_df.orderBy(desc("drift_minutes"), desc("update_count")).limit(1).collect()
-    if not candidate:
-        raise ValueError("No drift metrics available yet. Run ingestion and transformation first.")
+# DBTITLE 1,Cell 5
+# Select the top drifting trips across ALL stops and buses
+TOP_CHART_TRIPS = 5
 
-    selected_trip_id = candidate[0]["trip_id"]
-    selected_stop_id = candidate[0]["stop_id"]
+top_trips = (
+    metrics_df
+    .orderBy(desc("drift_minutes"), desc("update_count"))
+    .limit(TOP_CHART_TRIPS)
+    .select("trip_id", "stop_id", "stop_name", "route_short_name", "drift_minutes")
+    .collect()
+)
 
-print(f"Analyzing stop_id={selected_stop_id}, trip_id={selected_trip_id}")
+if not top_trips:
+    raise ValueError("No drift metrics available yet. Run ingestion and transformation first.")
+
+print(f"Top {len(top_trips)} drifting trips across all buses:")
+for i, row in enumerate(top_trips, 1):
+    stop_label = row['stop_name'] or row['stop_id']
+    print(f"  {i}. Route {row['route_short_name']}, {stop_label} — {row['drift_minutes']:.1f} min drift")
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 6
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 
-trip_pdf = (
-    raw_df.where(col("trip_id") == selected_trip_id)
-    .where(col("stop_id") == selected_stop_id)
-    .where(col("estimatedDeparture").isNotNull())
-    .select("ingestion_timestamp", "estimatedDeparture", "scheduledDeparture", "minutesTillDeparture", "route_short_name")
-    .orderBy("ingestion_timestamp")
-    .toPandas()
-)
-
-if trip_pdf.empty:
-    raise ValueError(f"No raw snapshots found for stop_id={selected_stop_id}, trip_id={selected_trip_id}")
-
-trip_pdf["ingestion_timestamp"] = pd.to_datetime(trip_pdf["ingestion_timestamp"])
-trip_pdf["estimatedDeparture"] = pd.to_datetime(trip_pdf["estimatedDeparture"])
-trip_pdf["scheduledDeparture"] = pd.to_datetime(trip_pdf["scheduledDeparture"])
-trip_pdf["time_before_departure_minutes"] = (
-    trip_pdf["estimatedDeparture"] - trip_pdf["ingestion_timestamp"]
-).dt.total_seconds() / 60.0
-
-# Deduplicate by ingestion_timestamp
-trip_pdf = trip_pdf.drop_duplicates(subset=["ingestion_timestamp"], keep="first").reset_index(drop=True)
-
-route_name = trip_pdf["route_short_name"].iloc[0] if "route_short_name" in trip_pdf.columns and pd.notna(trip_pdf["route_short_name"].iloc[0]) else "Unknown"
-scheduled = trip_pdf["scheduledDeparture"].iloc[0]
-
-# --- Chart 1: ETA Drift Timeline ---
-ACCENT = "#6366f1"    # indigo
-SCHED = "#10b981"     # emerald
-DRIFT_COLOR = "#ef4444"  # red
+# --- Chart 1: ETA Drift Timeline — Top Drifting Trips Across All Buses ---
+COLORS = ["#6366f1", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6"]
 BG = "#fafbfc"
 GRID = "#e5e7eb"
 
-fig, ax = plt.subplots(figsize=(13, 6), dpi=120)
+fig, ax = plt.subplots(figsize=(14, 7), dpi=120)
 fig.patch.set_facecolor(BG)
 ax.set_facecolor(BG)
 
-x = trip_pdf["time_before_departure_minutes"].values
-y = trip_pdf["estimatedDeparture"]
-
-# Fill area between scheduled and estimated
-scheduled_series = pd.Series([scheduled] * len(y))
-ax.fill_between(x, scheduled_series, y, alpha=0.12, color=DRIFT_COLOR, label="_nolegend_")
-
-# Main line + markers
-ax.plot(x, y, color=ACCENT, linewidth=2.5, zorder=4, label="Estimated departure")
-ax.scatter(x, y, color=ACCENT, s=45, zorder=5, edgecolors="white", linewidth=1.2)
-
-# Scheduled departure reference
-ax.axhline(y=scheduled, color=SCHED, linestyle="--", linewidth=2, alpha=0.8, label=f"Scheduled ({scheduled.strftime('%H:%M')})")
-
-# Annotate max drift
-max_idx = trip_pdf["estimatedDeparture"].idxmax()
-max_est = trip_pdf.loc[max_idx, "estimatedDeparture"]
-max_x = trip_pdf.loc[max_idx, "time_before_departure_minutes"]
-max_drift_min = (max_est - scheduled).total_seconds() / 60
-if max_drift_min > 0.5:
-    ax.annotate(
-        f"  +{max_drift_min:.1f} min",
-        xy=(max_x, max_est),
-        fontsize=13, color=DRIFT_COLOR, fontweight="bold",
-        ha="left", va="bottom",
+total_points = 0
+for i, row in enumerate(top_trips):
+    trip_pdf = (
+        raw_df.where(col("trip_id") == row["trip_id"])
+        .where(col("stop_id") == row["stop_id"])
+        .where(col("estimatedDeparture").isNotNull())
+        .select("ingestion_timestamp", "estimatedDeparture", "scheduledDeparture")
+        .orderBy("ingestion_timestamp")
+        .toPandas()
     )
+
+    if trip_pdf.empty:
+        continue
+
+    trip_pdf["ingestion_timestamp"] = pd.to_datetime(trip_pdf["ingestion_timestamp"])
+    trip_pdf["estimatedDeparture"] = pd.to_datetime(trip_pdf["estimatedDeparture"])
+    trip_pdf["scheduledDeparture"] = pd.to_datetime(trip_pdf["scheduledDeparture"])
+    trip_pdf = trip_pdf.drop_duplicates(subset=["ingestion_timestamp"], keep="first")
+
+    # Drift from scheduled in minutes
+    trip_pdf["drift_from_scheduled"] = (
+        trip_pdf["estimatedDeparture"] - trip_pdf["scheduledDeparture"]
+    ).dt.total_seconds() / 60.0
+
+    trip_pdf["time_before_departure"] = (
+        trip_pdf["estimatedDeparture"] - trip_pdf["ingestion_timestamp"]
+    ).dt.total_seconds() / 60.0
+
+    color = COLORS[i % len(COLORS)]
+    stop_label = row["stop_name"] or row["stop_id"]
+    label = f"Rt {row['route_short_name']}, {stop_label}"
+
+    ax.plot(trip_pdf["time_before_departure"], trip_pdf["drift_from_scheduled"],
+            color=color, linewidth=2.2, label=label, zorder=4)
+    ax.scatter(trip_pdf["time_before_departure"], trip_pdf["drift_from_scheduled"],
+               color=color, s=30, zorder=5, edgecolors="white", linewidth=0.8)
+
+    total_points += len(trip_pdf)
+
+ax.axhline(y=0, color="#9ca3af", linestyle="--", linewidth=1.5, alpha=0.7, label="On schedule")
 
 # Styling
 ax.invert_xaxis()
-ax.yaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
 ax.set_xlabel("Minutes before estimated departure", fontsize=13, fontweight="medium", labelpad=12)
-ax.set_ylabel("Estimated departure time", fontsize=13, fontweight="medium", labelpad=12)
+ax.set_ylabel("Drift from schedule (minutes)", fontsize=13, fontweight="medium", labelpad=12)
 ax.set_title(
-    f"ETA Drift Over Time — Route {route_name}, Stop {selected_stop_id}",
+    "ETA Drift Over Time \u2014 Top Drifting Trips Across All Buses",
     fontsize=17, fontweight="bold", pad=18, color="#1f2937",
 )
 ax.tick_params(labelsize=11, colors="#4b5563")
 for spine in ax.spines.values():
     spine.set_visible(False)
 ax.grid(True, alpha=0.5, color=GRID, linewidth=0.8)
-ax.legend(loc="upper left", fontsize=11, frameon=True, facecolor="white", edgecolor=GRID, framealpha=0.95)
+ax.legend(loc="upper left", fontsize=10, frameon=True, facecolor="white", edgecolor=GRID, framealpha=0.95)
 
-# Subtitle
 fig.text(0.5, -0.01,
-    f"Each point is a real-time ETA snapshot taken at 2-minute intervals  ·  {len(trip_pdf)} observations",
+    f"Each line = one trip's ETA snapshots at \u223c2-min intervals  \u00b7  {total_points} total observations  \u00b7  Positive = running late",
     ha="center", fontsize=10, color="#6b7280", style="italic")
 
 plt.tight_layout()
 plt.show()
+
+# COMMAND ----------
+
+# DBTITLE 1,Stop-level drift comparison
+# --- Chart 2: Average Drift by Stop (All Buses) ---
+from pyspark.sql.functions import avg as spark_avg, count as spark_count
+
+BG = "#fafbfc"
+GRID = "#e5e7eb"
+
+stops_pdf = (
+    metrics_df
+    .where(col("stop_name").isNotNull())
+    .groupBy("stop_id", "stop_name")
+    .agg(
+        spark_avg("drift_minutes").alias("avg_drift_minutes"),
+        spark_count("*").alias("trip_count"),
+    )
+    .where(col("trip_count") >= 2)
+    .orderBy(desc("avg_drift_minutes"))
+    .limit(top_n)
+    .toPandas()
+)
+
+stops_pdf["avg_drift_minutes"] = stops_pdf["avg_drift_minutes"].astype(float)
+stops_pdf = stops_pdf.sort_values("avg_drift_minutes", ascending=True)
+stops_pdf["label"] = stops_pdf["stop_name"].fillna(stops_pdf["stop_id"])
+
+if stops_pdf.empty:
+    print("No stop data yet \u2014 collect more snapshots.")
+else:
+    cmap = LinearSegmentedColormap.from_list("", ["#a5b4fc", "#6366f1", "#312e81"])
+    norm = plt.Normalize(stops_pdf["avg_drift_minutes"].min(), stops_pdf["avg_drift_minutes"].max())
+    colors = [cmap(norm(v)) for v in stops_pdf["avg_drift_minutes"]]
+
+    fig, ax = plt.subplots(figsize=(13, max(4, len(stops_pdf) * 0.55)), dpi=120)
+    fig.patch.set_facecolor(BG)
+    ax.set_facecolor(BG)
+
+    bars = ax.barh(
+        stops_pdf["label"], stops_pdf["avg_drift_minutes"],
+        color=colors, edgecolor="white", linewidth=1.2, height=0.6,
+    )
+
+    for bar, val, cnt in zip(bars, stops_pdf["avg_drift_minutes"], stops_pdf["trip_count"]):
+        ax.text(
+            bar.get_width() + 0.15, bar.get_y() + bar.get_height() / 2,
+            f"{val:.1f} min ({int(cnt)} trips)",
+            va="center", ha="left", fontsize=11, color="#4b5563", fontweight="bold",
+        )
+
+    ax.set_xlabel("Average ETA Drift (minutes)", fontsize=13, fontweight="medium", labelpad=12)
+    ax.set_title(
+        f"Top {len(stops_pdf)} Stops by Average ETA Drift (All Buses)",
+        fontsize=17, fontweight="bold", pad=18, color="#1f2937",
+    )
+    ax.tick_params(labelsize=12, colors="#4b5563")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.grid(True, axis="x", alpha=0.5, color=GRID, linewidth=0.8)
+    ax.set_xlim(0, stops_pdf["avg_drift_minutes"].max() * 1.35)
+
+    fig.text(0.5, -0.02,
+        f"Stops with \u2265 2 observed trips  \u00b7  Darker bars = higher drift  \u00b7  All buses included",
+        ha="center", fontsize=10, color="#6b7280", style="italic")
+
+    plt.tight_layout()
+    plt.show()
 
 # COMMAND ----------
 
@@ -205,87 +274,68 @@ plt.show()
 
 # COMMAND ----------
 
-# --- Chart 3: Route Ranking by Avg Drift (Student Routes Only) ---
-import re
-from pyspark.sql.functions import udf, avg as spark_avg
-from pyspark.sql.types import StringType
+# --- Chart 3: Route Ranking by Average ETA Drift ---
+from pyspark.sql.functions import avg as spark_avg, count as spark_count
 
 BG = "#fafbfc"
 GRID = "#e5e7eb"
 
-# Map route number prefix → display name + color
-STUDENT_ROUTES = {
-    "1":  {"name": "1 YELLOW",  "color": "#facc15"},
-    "5":  {"name": "5 GREEN",   "color": "#22c55e"},
-    "10": {"name": "10 GOLD",   "color": "#f59e0b"},
-    "12": {"name": "12 TEAL",   "color": "#14b8a6"},
-    "13": {"name": "13 SILVER", "color": "#94a3b8"},
-    "22": {"name": "22 ILLINI", "color": "#f97316"},
-}
-
-def extract_route_number(name):
-    if name is None:
-        return None
-    m = re.match(r"^(\d+)", name)
-    return m.group(1) if m else None
-
-extract_udf = udf(extract_route_number, StringType())
-
-# Extract route number, filter to student routes, group
-route_nums = list(STUDENT_ROUTES.keys())
+# Aggregate drift by route across all buses, require at least 2 observations
 routes_pdf = (
     metrics_df
-    .withColumn("route_num", extract_udf(col("route_short_name")))
-    .where(col("route_num").isin(route_nums))
-    .groupBy("route_num")
-    .agg(spark_avg("drift_minutes").alias("avg_drift_minutes"))
+    .where(col("route_short_name").isNotNull())
+    .groupBy("route_short_name")
+    .agg(
+        spark_avg("drift_minutes").alias("avg_drift_minutes"),
+        spark_count("*").alias("trip_count"),
+    )
+    .where(col("trip_count") >= 2)
+    .orderBy(desc("avg_drift_minutes"))
+    .limit(top_n)
     .toPandas()
 )
 
-# Add display names and sort
 routes_pdf["avg_drift_minutes"] = routes_pdf["avg_drift_minutes"].astype(float)
-routes_pdf["display_name"] = routes_pdf["route_num"].map(lambda x: STUDENT_ROUTES[x]["name"])
-routes_pdf["bar_color"] = routes_pdf["route_num"].map(lambda x: STUDENT_ROUTES[x]["color"])
 routes_pdf = routes_pdf.sort_values("avg_drift_minutes", ascending=True)
 
 if routes_pdf.empty:
-    print("No student route data yet — collect more snapshots.")
+    print("No route data yet \u2014 collect more snapshots.")
 else:
-    fig, ax = plt.subplots(figsize=(13, max(4, len(routes_pdf) * 0.8)), dpi=120)
+    # Color bars with a gradient from light to dark indigo
+    cmap = LinearSegmentedColormap.from_list("", ["#a5b4fc", "#6366f1", "#312e81"])
+    norm = plt.Normalize(routes_pdf["avg_drift_minutes"].min(), routes_pdf["avg_drift_minutes"].max())
+    colors = [cmap(norm(v)) for v in routes_pdf["avg_drift_minutes"]]
+
+    fig, ax = plt.subplots(figsize=(13, max(4, len(routes_pdf) * 0.55)), dpi=120)
     fig.patch.set_facecolor(BG)
     ax.set_facecolor(BG)
 
     bars = ax.barh(
-        routes_pdf["display_name"], routes_pdf["avg_drift_minutes"],
-        color=routes_pdf["bar_color"], edgecolor="white", linewidth=1.2, height=0.6,
+        routes_pdf["route_short_name"], routes_pdf["avg_drift_minutes"],
+        color=colors, edgecolor="white", linewidth=1.2, height=0.6,
     )
 
-    for bar, val in zip(bars, routes_pdf["avg_drift_minutes"]):
+    for bar, val, count in zip(bars, routes_pdf["avg_drift_minutes"], routes_pdf["trip_count"]):
         ax.text(
             bar.get_width() + 0.15, bar.get_y() + bar.get_height() / 2,
-            f"{val:.1f} min",
-            va="center", ha="left", fontsize=12, color="#4b5563", fontweight="bold",
+            f"{val:.1f} min ({int(count)} trips)",
+            va="center", ha="left", fontsize=11, color="#4b5563", fontweight="bold",
         )
 
     ax.set_xlabel("Average ETA Drift (minutes)", fontsize=13, fontweight="medium", labelpad=12)
     ax.set_title(
-        "ETA Reliability of Popular CUMTD Student Routes",
+        f"Top {len(routes_pdf)} CUMTD Routes by Average ETA Drift",
         fontsize=17, fontweight="bold", pad=18, color="#1f2937",
     )
     ax.tick_params(labelsize=12, colors="#4b5563")
     for spine in ax.spines.values():
         spine.set_visible(False)
     ax.grid(True, axis="x", alpha=0.5, color=GRID, linewidth=0.8)
-    ax.set_xlim(0, routes_pdf["avg_drift_minutes"].max() * 1.3)
+    ax.set_xlim(0, routes_pdf["avg_drift_minutes"].max() * 1.35)
 
-    # Note which routes are missing
-    found = set(routes_pdf["route_num"].tolist())
-    missing = [STUDENT_ROUTES[k]["name"] for k in route_nums if k not in found]
-    subtitle = f"Bars use each route's official color  ·  Based on real-time snapshots at Illinois Terminal"
-    if missing:
-        subtitle += f"\n{', '.join(missing)} — not yet observed (need more collection time)"
-
-    fig.text(0.5, -0.02, subtitle, ha="center", fontsize=10, color="#6b7280", style="italic")
+    fig.text(0.5, -0.02,
+        f"Routes with \u2265 2 observed trips  \u00b7  Darker bars = higher drift  \u00b7  Based on real-time ETA snapshots",
+        ha="center", fontsize=10, color="#6b7280", style="italic")
 
     plt.tight_layout()
     plt.show()

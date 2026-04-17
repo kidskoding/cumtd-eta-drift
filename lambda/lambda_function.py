@@ -56,8 +56,14 @@ _cache_populated = False
 # HTTP helpers
 # ---------------------------------------------------------------------------
 def _request_json(url: str, params: Dict[str, str] | None = None) -> Dict[str, Any]:
+    if params is None:
+        params = {}
+    # Include API key as query param (some CUMTD endpoints expect ?key=...)
+    if API_KEY and "key" not in params:
+        params["key"] = API_KEY
     query = f"?{urlencode(params)}" if params else ""
     full_url = f"{url}{query}"
+    # Also send as header for endpoints that prefer it
     headers = {"X-ApiKey": API_KEY} if API_KEY else {}
 
     last_err = None
@@ -155,7 +161,9 @@ def _discover_stops() -> Set[str]:
     """
     global _route_stops_cache, _cache_populated
 
-    if _cache_populated:
+    # Only return cache if it actually contains stops
+    if _cache_populated and _route_stops_cache:
+        print(f"[route-discovery] Returning {len(_route_stops_cache)} cached stops")
         return _route_stops_cache
 
     base = API_BASE_URL.rstrip("/")
@@ -163,8 +171,12 @@ def _discover_stops() -> Set[str]:
 
     try:
         # 1. List all routes
-        routes_data = _request_json(f"{base}/routes")
+        routes_url = f"{base}/routes"
+        print(f"[route-discovery] Fetching routes from: {routes_url}")
+        routes_data = _request_json(routes_url)
+        print(f"[route-discovery] Routes response keys: {list(routes_data.keys())}")
         routes_list = _extract_list(routes_data)
+        print(f"[route-discovery] Extracted {len(routes_list)} routes from response")
 
         # 2. Filter by keywords (or include all if no filters set)
         matching = []
@@ -215,8 +227,15 @@ def _discover_stops() -> Set[str]:
     except Exception as exc:
         print(f"[route-discovery] Failed to fetch routes list: {exc}")
 
-    _route_stops_cache = discovered
-    _cache_populated = True
+    # Only cache if we actually found stops — never cache empty results
+    if discovered:
+        _route_stops_cache = discovered
+        _cache_populated = True
+    else:
+        # Reset cache so next invocation retries
+        _cache_populated = False
+        print("[route-discovery] WARNING: No stops found — will retry on next invocation")
+
     return discovered
 
 
@@ -288,7 +307,11 @@ def lambda_handler(event, context):
             "statusCode": 200,
             "body": json.dumps(
                 {"timestamp": ts.isoformat(),
-                 "error": "No stops discovered. Check API connectivity."},
+                 "error": "No stops discovered. Check API connectivity.",
+                 "api_base_url": API_BASE_URL,
+                 "api_key_set": bool(API_KEY),
+                 "explicit_stop_ids": STOP_IDS,
+                 "route_filters": ROUTE_FILTERS},
                 default=str,
             ),
         }
