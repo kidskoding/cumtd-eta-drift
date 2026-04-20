@@ -55,5 +55,5 @@ renamed as (
     from source
 )
 
-select *
+select distinct *
 from renamed
