@@ -48,9 +48,6 @@ resources:
           depends_on:
             - task_key: ingest_departure_snapshots
           environment_key: default
-          environment_variables:
-            DATABRICKS_HOST: ${workspace.host}
-            DATABRICKS_HTTP_PATH: /sql/1.0/warehouses/05d2ded59afce66c
           dbt_task:
             warehouse_id: 05d2ded59afce66c
             project_directory: dbt
@@ -61,9 +58,6 @@ resources:
           depends_on:
             - task_key: compute_departure_drift_metrics
           environment_key: default
-          environment_variables:
-            DATABRICKS_HOST: ${workspace.host}
-            DATABRICKS_HTTP_PATH: /sql/1.0/warehouses/05d2ded59afce66c
           dbt_task:
             warehouse_id: 05d2ded59afce66c
             project_directory: dbt
