@@ -89,6 +89,12 @@ folder in the Databricks workspace and rerun the workflow:
 /Workspace/Users/<your-databricks-user>/.bundle/cumtd_eta_drift/prod
 ```
 
+The active GitHub Actions deployment path is:
+
+```text
+/Workspace/Users/<your-databricks-user>/.databricks_bundles/cumtd_eta_drift/prod
+```
+
 ## dbt Transformation Layer
 
 The `dbt/` directory is scaffolded for dbt on Databricks. Ingestion stays in the Databricks Python notebook; dbt starts from the raw Delta tables and owns the clean, intermediate, and mart models.
