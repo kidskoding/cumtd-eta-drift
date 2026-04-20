@@ -4,7 +4,7 @@
 ) }}
 
 with route_colors as (
-    select route_short_name, route_group_name, hex_color, text_hex_color
+    select distinct route_group_name, hex_color, text_hex_color
     from {{ ref('stg_route_colors') }}
 ),
 
@@ -52,7 +52,12 @@ scored_with_colors as (
         coalesce(rc.hex_color, '808285') as hex_color,
         coalesce(rc.text_hex_color, 'ffffff') as text_hex_color
     from scored s
-    left join route_colors rc on s.route_short_name = rc.route_short_name
+    left join route_colors rc
+        on upper(s.route_short_name) like '%' || upper(rc.route_group_name) || '%'
+    qualify row_number() over (
+        partition by s.route_id
+        order by length(coalesce(rc.route_group_name, '')) desc
+    ) = 1
 )
 
 select
