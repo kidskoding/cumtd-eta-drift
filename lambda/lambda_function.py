@@ -156,8 +156,7 @@ def _discover_stops() -> Set[str]:
     included (default — captures every bus in the system).
 
     Uses REST endpoints:
-      GET /routes              -> list all routes
-      GET /routes/{id}/stops   -> stops served by a route
+      GET /stops -> list all stops in the system
     """
     global _route_stops_cache, _cache_populated
 
@@ -170,62 +169,25 @@ def _discover_stops() -> Set[str]:
     discovered: Set[str] = set()
 
     try:
-        # 1. List all routes
-        routes_url = f"{base}/routes"
-        print(f"[route-discovery] Fetching routes from: {routes_url}")
-        routes_data = _request_json(routes_url)
-        print(f"[route-discovery] Routes response keys: {list(routes_data.keys())}")
-        routes_list = _extract_list(routes_data)
-        print(f"[route-discovery] Extracted {len(routes_list)} routes from response")
+        stops_url = f"{base}/stops"
+        print(f"[route-discovery] Fetching all stops from: {stops_url}")
+        stops_data = _request_json(stops_url)
+        stops_list = _extract_list(stops_data)
+        print(f"[route-discovery] Extracted {len(stops_list)} stops from response")
 
-        # 2. Filter by keywords (or include all if no filters set)
-        matching = []
-        for route in routes_list:
-            if not isinstance(route, dict):
+        for stop in stops_list:
+            if not isinstance(stop, dict):
                 continue
-            name = _get_str(route, ["route_short_name", "shortName",
-                                    "short_name", "name"]).upper()
-            route_id = _get_str(route, ["route_id", "id"])
-            if not route_id:
-                continue
-
-            if not ROUTE_FILTERS:
-                # No filters → include every route
-                matching.append({"id": route_id, "name": name})
-            else:
-                for kw in ROUTE_FILTERS:
-                    if kw in name:
-                        matching.append({"id": route_id, "name": name})
-                        break
-
-        print(f"[route-discovery] Matched {len(matching)} routes "
-              f"(filters={ROUTE_FILTERS or 'ALL'}): "
-              f"{[m['name'] for m in matching]}")
-
-        # 3. For each matched route, discover its stops
-        for m in matching:
-            try:
-                encoded = quote(m["id"], safe="")
-                stops_data = _request_json(f"{base}/routes/{encoded}/stops")
-                stops_list = _extract_list(stops_data)
-
-                for stop in stops_list:
-                    if not isinstance(stop, dict):
-                        continue
-                    sid = _get_str(stop, ["stop_id", "id"])
-                    if sid:
-                        # Use group-level ID (strip boarding-point suffix)
-                        group_id = sid.split(":")[0] if ":" in sid else sid
-                        discovered.add(group_id)
-            except Exception as exc:
-                print(f"[route-discovery] Could not get stops for "
-                      f"{m['name']} ({m['id']}): {exc}")
+            sid = _get_str(stop, ["stop_id", "id"])
+            if sid:
+                group_id = sid.split(":")[0] if ":" in sid else sid
+                discovered.add(group_id)
 
         print(f"[route-discovery] Discovered {len(discovered)} unique stop "
               f"groups: {sorted(discovered)}")
 
     except Exception as exc:
-        print(f"[route-discovery] Failed to fetch routes list: {exc}")
+        print(f"[route-discovery] Failed to fetch stops list: {exc}")
 
     # Only cache if we actually found stops — never cache empty results
     if discovered:
