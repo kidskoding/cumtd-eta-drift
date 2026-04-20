@@ -44,20 +44,9 @@ resources:
               s3_prefix: ${var.s3_prefix}
               stop_ids: ${var.stop_ids}
               lookahead_minutes: "60"
-        - task_key: seed_route_colors
-          depends_on:
-            - task_key: ingest_departure_snapshots
-          environment_key: default
-          dbt_task:
-            warehouse_id: 05d2ded59afce66c
-            catalog: ${var.catalog}
-            schema: ${var.schema}
-            project_directory: dbt
-            commands:
-              - "dbt seed --vars '{\"catalog\": \"${var.catalog}\", \"raw_schema\": \"${var.schema}\", \"mart_schema\": \"${var.schema}\"}'"
         - task_key: compute_departure_drift_metrics
           depends_on:
-            - task_key: seed_route_colors
+            - task_key: ingest_departure_snapshots
           environment_key: default
           dbt_task:
             warehouse_id: 05d2ded59afce66c
