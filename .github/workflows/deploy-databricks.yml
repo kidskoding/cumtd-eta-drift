@@ -53,6 +53,20 @@ jobs:
             exit 1
           fi
 
+      - name: Normalize Databricks host
+        run: |
+          clean_host="$(printf '%s' "$DATABRICKS_HOST" | tr -d '[:space:]')"
+
+          case "$clean_host" in
+            https://*)
+              echo "DATABRICKS_HOST=$clean_host" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "DATABRICKS_HOST must be a workspace URL that starts with https://"
+              exit 1
+              ;;
+          esac
+
       - name: Validate bundle
         run: databricks bundle validate --target "$BUNDLE_TARGET"
 
