@@ -20,6 +20,7 @@ Schedule via EventBridge rule (e.g. every 2 minutes) to build snapshot history.
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Set
 from urllib.parse import quote, urlencode
@@ -45,6 +46,8 @@ MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
 REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "10"))
 # Cap on stop groups when fallback /stops endpoint is used
 MAX_STOPS = int(os.environ.get("MAX_STOPS", "150"))
+# Parallel workers for departure fetching
+MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "10"))
 
 http = urllib3.PoolManager(timeout=urllib3.Timeout(total=REQUEST_TIMEOUT))
 s3 = boto3.client("s3")
@@ -163,16 +166,11 @@ def _stops_from_list(stops_list: list) -> Set[str]:
 
 
 def _discover_stops() -> Set[str]:
-    """Discover stop group IDs served by active routes.
+    """Discover stop group IDs from GET /stops, capped at MAX_STOPS.
 
-    Strategy (fastest-first):
-    1. GET /routes/groups  →  collect gtfsRoute names per group
-       (respects ROUTE_FILTERS if set)
-    2. GET /routes/{id}/stops  per route  →  collect stop group IDs
-       Expected result: ~50-150 unique stop groups
-    3. If route-endpoint yields nothing (404 / unsupported), fall back to
-       GET /stops but cap at MAX_STOPS unique stop groups so Lambda does
-       not time out polling thousands of stops.
+    Fetching the full list is one fast API call; the cap prevents the
+    departure-polling loop from running too long.  With parallel workers
+    (MAX_WORKERS) even 150 stops finish well within the Lambda timeout.
     """
     global _route_stops_cache, _cache_populated
 
@@ -183,62 +181,24 @@ def _discover_stops() -> Set[str]:
     base = API_BASE_URL.rstrip("/")
     discovered: Set[str] = set()
 
-    # --- Phase 1: collect active route identifiers from /routes/groups ---
-    active_route_ids: List[str] = []
     try:
-        groups_data = _request_json(f"{base}/routes/groups")
-        groups = groups_data.get("result") or groups_data.get("Result") or []
-        for group in groups:
-            group_name = (group.get("routeGroupName") or "").upper()
-            if ROUTE_FILTERS and not any(f in group_name for f in ROUTE_FILTERS):
+        stops_data = _request_json(f"{base}/stops")
+        for stop in _extract_list(stops_data):
+            if not isinstance(stop, dict):
                 continue
-            for route in group.get("routes") or []:
-                for gtfs_name in route.get("gtfsRoutes") or []:
-                    if gtfs_name and str(gtfs_name) not in active_route_ids:
-                        active_route_ids.append(str(gtfs_name))
-                rid = (route.get("routeId")
-                       or route.get("id")
-                       or route.get("route_id"))
-                if rid and str(rid) not in active_route_ids:
-                    active_route_ids.append(str(rid))
-        print(f"[route-discovery] {len(active_route_ids)} active route identifiers")
+            sid = _get_str(stop, ["stop_id", "id"])
+            if not sid:
+                continue
+            discovered.add(sid.split(":")[0] if ":" in sid else sid)
+            if len(discovered) >= MAX_STOPS:
+                break
+        print(f"[route-discovery] Discovered {len(discovered)} stop groups (cap={MAX_STOPS})")
     except Exception as exc:
-        print(f"[route-discovery] Could not fetch /routes/groups: {exc}")
-
-    # --- Phase 2: per-route stops endpoint ---
-    for rid in active_route_ids:
-        try:
-            stops_data = _request_json(
-                f"{base}/routes/{quote(rid, safe='')}/stops"
-            )
-            discovered |= _stops_from_list(_extract_list(stops_data))
-        except Exception:
-            pass  # endpoint may not exist; silence and move on
-
-    print(f"[route-discovery] Route-based discovery: {len(discovered)} stop groups")
-
-    # --- Phase 3: fallback — /stops capped at MAX_STOPS ---
-    if not discovered:
-        print(f"[route-discovery] Falling back to /stops (cap={MAX_STOPS})")
-        try:
-            stops_data = _request_json(f"{base}/stops")
-            for stop in _extract_list(stops_data):
-                if not isinstance(stop, dict):
-                    continue
-                sid = _get_str(stop, ["stop_id", "id"])
-                if not sid:
-                    continue
-                discovered.add(sid.split(":")[0] if ":" in sid else sid)
-                if len(discovered) >= MAX_STOPS:
-                    break
-            print(f"[route-discovery] Fallback: {len(discovered)} stop groups")
-        except Exception as exc:
-            print(f"[route-discovery] /stops fallback failed: {exc}")
+        print(f"[route-discovery] /stops failed: {exc}")
 
     if discovered:
         _route_stops_cache = discovered
         _cache_populated = True
-        print(f"[route-discovery] Final stop set: {len(discovered)} groups")
     else:
         _cache_populated = False
         print("[route-discovery] WARNING: No stops found — will retry on next invocation")
@@ -366,22 +326,24 @@ def lambda_handler(event, context):
     except Exception as exc:
         print(f"[lambda] Warning: Could not refresh route colors: {exc}")
 
-    for stop_id in all_stop_ids:
+    def _poll_stop(stop_id: str) -> dict:
         try:
             stop_metadata = _extract_stop_metadata(_fetch_stop_metadata(stop_id))
             payload = _fetch_departures(stop_id)
             s3_path = _write_to_s3(stop_id, stop_metadata, payload, ts)
-            results.append(
-                {
-                    "stop_id": stop_id,
-                    "stop_name": stop_metadata.get("stop_group_name"),
-                    "status": "success",
-                    "s3_path": s3_path,
-                }
-            )
+            return {
+                "stop_id": stop_id,
+                "stop_name": stop_metadata.get("stop_group_name"),
+                "status": "success",
+                "s3_path": s3_path,
+            }
         except Exception as exc:
-            results.append({"stop_id": stop_id, "status": "failed",
-                            "error": str(exc)})
+            return {"stop_id": stop_id, "status": "failed", "error": str(exc)}
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        futures = {pool.submit(_poll_stop, sid): sid for sid in all_stop_ids}
+        for future in as_completed(futures):
+            results.append(future.result())
 
     return {
         "statusCode": 200,
