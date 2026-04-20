@@ -8,6 +8,7 @@ dependencies = [
     "pandas>=2.2,<2.4",
     "pyspark>=3.5,<4",
     "requests>=2.33.1",
+    "scikit-learn>=1.5,<1.8",
 ]
 
 [dependency-groups]
