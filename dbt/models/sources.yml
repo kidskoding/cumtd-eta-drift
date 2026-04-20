@@ -27,6 +27,15 @@ sources:
           - name: trip_id
           - name: estimatedDeparture
           - name: scheduledDeparture
+      - name: route_colors
+        description: Route group colors loaded from CUMTD API via Lambda and ingest notebook.
+        columns:
+          - name: route_short_name
+            tests:
+              - not_null
+          - name: route_group_name
+          - name: hex_color
+          - name: text_hex_color
       - name: departure_ingestion_audit
         description: One row per stop queried in each ingestion run.
         config:

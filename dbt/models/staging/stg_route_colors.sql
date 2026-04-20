@@ -5,4 +5,4 @@ select
     route_group_name,
     hex_color,
     text_hex_color
-from {{ var('catalog') }}.{{ var('raw_schema') }}.route_colors
+from {{ source('cumtd_raw', 'route_colors') }}
