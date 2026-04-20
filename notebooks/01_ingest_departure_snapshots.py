@@ -497,8 +497,8 @@ route_colors_schema = StructType([
 spark.createDataFrame([], route_colors_schema).write.format("delta").mode("ignore").saveAsTable(route_colors_table)
 
 try:
-    color_text_df = spark.read.option("wholetext", True).text(route_colors_s3_path)
-    color_json_str = color_text_df.collect()[0].value
+    dbutils.fs.ls(route_colors_s3_path)
+    color_json_str = dbutils.fs.head(route_colors_s3_path, 1 << 20)
     color_data = json.loads(color_json_str)
     color_df = spark.createDataFrame(color_data, route_colors_schema)
     (
