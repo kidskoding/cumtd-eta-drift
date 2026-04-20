@@ -92,7 +92,7 @@ folder in the Databricks workspace and rerun the workflow:
 The active GitHub Actions deployment path is:
 
 ```text
-/Workspace/Users/<your-databricks-user>/.databricks_bundles/cumtd_eta_drift/prod
+/Workspace/Users/anirudhkonidala@gmail.com/.databricks_bundles_v2/cumtd_eta_drift/prod
 ```
 
 ## dbt Transformation Layer
