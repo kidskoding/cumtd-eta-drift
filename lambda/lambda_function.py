@@ -43,6 +43,8 @@ ROUTE_FILTERS = [
 LOOKAHEAD_MINUTES = int(os.environ.get("LOOKAHEAD_MINUTES", "60"))
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
 REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "10"))
+# Cap on stop groups when fallback /stops endpoint is used
+MAX_STOPS = int(os.environ.get("MAX_STOPS", "150"))
 
 http = urllib3.PoolManager(timeout=urllib3.Timeout(total=REQUEST_TIMEOUT))
 s3 = boto3.client("s3")
@@ -146,21 +148,34 @@ def _extract_stop_metadata(stop_metadata: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Route-based stop discovery
+# Active-stop discovery
 # ---------------------------------------------------------------------------
+def _stops_from_list(stops_list: list) -> Set[str]:
+    """Deduplicate a raw stops list into stop group IDs."""
+    out: Set[str] = set()
+    for stop in stops_list:
+        if not isinstance(stop, dict):
+            continue
+        sid = _get_str(stop, ["stop_id", "id"])
+        if sid:
+            out.add(sid.split(":")[0] if ":" in sid else sid)
+    return out
+
+
 def _discover_stops() -> Set[str]:
-    """Discover stop IDs by querying the CUMTD routes API.
+    """Discover stop group IDs served by active routes.
 
-    If ROUTE_FILTERS is set, only routes whose name contains one of the
-    keywords are included.  If ROUTE_FILTERS is empty, ALL routes are
-    included (default — captures every bus in the system).
-
-    Uses REST endpoints:
-      GET /stops -> list all stops in the system
+    Strategy (fastest-first):
+    1. GET /routes/groups  →  collect gtfsRoute names per group
+       (respects ROUTE_FILTERS if set)
+    2. GET /routes/{id}/stops  per route  →  collect stop group IDs
+       Expected result: ~50-150 unique stop groups
+    3. If route-endpoint yields nothing (404 / unsupported), fall back to
+       GET /stops but cap at MAX_STOPS unique stop groups so Lambda does
+       not time out polling thousands of stops.
     """
     global _route_stops_cache, _cache_populated
 
-    # Only return cache if it actually contains stops
     if _cache_populated and _route_stops_cache:
         print(f"[route-discovery] Returning {len(_route_stops_cache)} cached stops")
         return _route_stops_cache
@@ -168,33 +183,63 @@ def _discover_stops() -> Set[str]:
     base = API_BASE_URL.rstrip("/")
     discovered: Set[str] = set()
 
+    # --- Phase 1: collect active route identifiers from /routes/groups ---
+    active_route_ids: List[str] = []
     try:
-        stops_url = f"{base}/stops"
-        print(f"[route-discovery] Fetching all stops from: {stops_url}")
-        stops_data = _request_json(stops_url)
-        stops_list = _extract_list(stops_data)
-        print(f"[route-discovery] Extracted {len(stops_list)} stops from response")
-
-        for stop in stops_list:
-            if not isinstance(stop, dict):
+        groups_data = _request_json(f"{base}/routes/groups")
+        groups = groups_data.get("result") or groups_data.get("Result") or []
+        for group in groups:
+            group_name = (group.get("routeGroupName") or "").upper()
+            if ROUTE_FILTERS and not any(f in group_name for f in ROUTE_FILTERS):
                 continue
-            sid = _get_str(stop, ["stop_id", "id"])
-            if sid:
-                group_id = sid.split(":")[0] if ":" in sid else sid
-                discovered.add(group_id)
-
-        print(f"[route-discovery] Discovered {len(discovered)} unique stop "
-              f"groups: {sorted(discovered)}")
-
+            for route in group.get("routes") or []:
+                for gtfs_name in route.get("gtfsRoutes") or []:
+                    if gtfs_name and str(gtfs_name) not in active_route_ids:
+                        active_route_ids.append(str(gtfs_name))
+                rid = (route.get("routeId")
+                       or route.get("id")
+                       or route.get("route_id"))
+                if rid and str(rid) not in active_route_ids:
+                    active_route_ids.append(str(rid))
+        print(f"[route-discovery] {len(active_route_ids)} active route identifiers")
     except Exception as exc:
-        print(f"[route-discovery] Failed to fetch stops list: {exc}")
+        print(f"[route-discovery] Could not fetch /routes/groups: {exc}")
 
-    # Only cache if we actually found stops — never cache empty results
+    # --- Phase 2: per-route stops endpoint ---
+    for rid in active_route_ids:
+        try:
+            stops_data = _request_json(
+                f"{base}/routes/{quote(rid, safe='')}/stops"
+            )
+            discovered |= _stops_from_list(_extract_list(stops_data))
+        except Exception:
+            pass  # endpoint may not exist; silence and move on
+
+    print(f"[route-discovery] Route-based discovery: {len(discovered)} stop groups")
+
+    # --- Phase 3: fallback — /stops capped at MAX_STOPS ---
+    if not discovered:
+        print(f"[route-discovery] Falling back to /stops (cap={MAX_STOPS})")
+        try:
+            stops_data = _request_json(f"{base}/stops")
+            for stop in _extract_list(stops_data):
+                if not isinstance(stop, dict):
+                    continue
+                sid = _get_str(stop, ["stop_id", "id"])
+                if not sid:
+                    continue
+                discovered.add(sid.split(":")[0] if ":" in sid else sid)
+                if len(discovered) >= MAX_STOPS:
+                    break
+            print(f"[route-discovery] Fallback: {len(discovered)} stop groups")
+        except Exception as exc:
+            print(f"[route-discovery] /stops fallback failed: {exc}")
+
     if discovered:
         _route_stops_cache = discovered
         _cache_populated = True
+        print(f"[route-discovery] Final stop set: {len(discovered)} groups")
     else:
-        # Reset cache so next invocation retries
         _cache_populated = False
         print("[route-discovery] WARNING: No stops found — will retry on next invocation")
 
