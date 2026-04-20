@@ -169,17 +169,29 @@ def _stops_from_list(stops_list: list) -> Set[str]:
 
 
 def _discover_stops() -> Set[str]:
-    """Discover stop group IDs from GET /stops, capped at MAX_STOPS.
+    """Discover stop group IDs, using S3 cache to avoid slow /stops calls.
 
-    Fetching the full list is one fast API call; the cap prevents the
-    departure-polling loop from running too long.  With parallel workers
-    (MAX_WORKERS) even 150 stops finish well within the Lambda timeout.
+    Order: in-memory cache → S3 cache → live /stops API.
+    S3 cache persists across cold starts; delete cache/discovered_stops.json
+    in S3 to force a refresh.
     """
     global _route_stops_cache, _cache_populated
 
     if _cache_populated and _route_stops_cache:
         print(f"[route-discovery] Returning {len(_route_stops_cache)} cached stops")
         return _route_stops_cache
+
+    # Try S3 cache first
+    try:
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=STOPS_CACHE_KEY)
+        cached = json.loads(obj["Body"].read().decode("utf-8"))
+        if isinstance(cached, list) and cached:
+            print(f"[route-discovery] Loaded {len(cached)} stops from S3 cache")
+            _route_stops_cache = set(cached)
+            _cache_populated = True
+            return _route_stops_cache
+    except Exception:
+        pass  # cache miss — fall through to API
 
     base = API_BASE_URL.rstrip("/")
     discovered: Set[str] = set()
@@ -195,13 +207,23 @@ def _discover_stops() -> Set[str]:
             discovered.add(sid.split(":")[0] if ":" in sid else sid)
             if len(discovered) >= MAX_STOPS:
                 break
-        print(f"[route-discovery] Discovered {len(discovered)} stop groups (cap={MAX_STOPS})")
+        print(f"[route-discovery] Discovered {len(discovered)} stop groups from API (cap={MAX_STOPS})")
     except Exception as exc:
         print(f"[route-discovery] /stops failed: {exc}")
 
     if discovered:
         _route_stops_cache = discovered
         _cache_populated = True
+        try:
+            s3.put_object(
+                Bucket=S3_BUCKET,
+                Key=STOPS_CACHE_KEY,
+                Body=json.dumps(sorted(discovered)),
+                ContentType="application/json",
+            )
+            print(f"[route-discovery] Saved stop list to S3 cache")
+        except Exception as exc:
+            print(f"[route-discovery] Could not save S3 cache: {exc}")
     else:
         _cache_populated = False
         print("[route-discovery] WARNING: No stops found — will retry on next invocation")
@@ -236,6 +258,7 @@ def _get_str(obj: dict, keys: list) -> str:
 # Route colors
 # ---------------------------------------------------------------------------
 ROUTE_COLORS_KEY = "route-colors/route_colors.json"
+STOPS_CACHE_KEY = "cache/discovered_stops.json"
 
 def _fetch_route_colors() -> List[Dict[str, str]]:
     base = API_BASE_URL.rstrip("/")
