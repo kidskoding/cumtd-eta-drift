@@ -5,7 +5,7 @@ cumtd_eta_drift:
       type: databricks
       catalog: "{{ env_var('DATABRICKS_CATALOG', 'workspace') }}"
       schema: "{{ env_var('DATABRICKS_SCHEMA', 'cumtd_eta_drift') }}"
-      host: "{{ env_var('DATABRICKS_HOST', 'dbc-668159b2-53e5.cloud.databricks.com') }}"
-      http_path: "{{ env_var('DATABRICKS_HTTP_PATH', '/sql/1.0/warehouses/05d2ded59afce66c') }}"
-      token: "{{ env_var('DATABRICKS_TOKEN', '') }}"
+      host: "{{ env_var('DATABRICKS_HOST') }}"
+      http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
+      token: "{{ env_var('DATABRICKS_TOKEN') }}"
       threads: 4

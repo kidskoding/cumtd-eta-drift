@@ -27,6 +27,9 @@ resources:
         timezone_id: America/Chicago
         pause_status: PAUSED
       max_concurrent_runs: 1
+      environment_variables:
+        DATABRICKS_HOST: ${workspace.host}
+        DATABRICKS_HTTP_PATH: /sql/1.0/warehouses/05d2ded59afce66c
       environments:
         - environment_key: default
           spec:
