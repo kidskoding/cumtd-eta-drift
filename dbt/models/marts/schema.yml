@@ -93,3 +93,61 @@ models:
       - name: service_date
         tests:
           - not_null
+
+  - name: eta_trust_route_scores
+    description: Dashboard-ready route-level ETA trust scores and student buffer recommendations.
+    columns:
+      - name: route_short_name
+        tests:
+          - not_null
+      - name: observed_trip_count
+        tests:
+          - not_null
+      - name: eta_trust_score
+        tests:
+          - not_null
+      - name: suggested_buffer_minutes
+        tests:
+          - not_null
+      - name: eta_trust_label
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['High trust', 'Medium trust', 'Low trust']
+
+  - name: eta_trust_stop_scores
+    description: Dashboard-ready stop/platform-level ETA trust scores and student buffer recommendations.
+    columns:
+      - name: stop_id
+        tests:
+          - not_null
+      - name: observed_trip_count
+        tests:
+          - not_null
+      - name: eta_trust_score
+        tests:
+          - not_null
+      - name: suggested_buffer_minutes
+        tests:
+          - not_null
+      - name: eta_trust_label
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['High trust', 'Medium trust', 'Low trust']
+
+  - name: eta_trust_route_stop_heatmap
+    description: Dashboard-ready route/stop matrix for heatmap-style ETA trust visualization.
+    columns:
+      - name: route_short_name
+        tests:
+          - not_null
+      - name: stop_id
+        tests:
+          - not_null
+      - name: observed_trip_count
+        tests:
+          - not_null
+      - name: eta_trust_score
+        tests:
+          - not_null

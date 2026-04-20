@@ -30,8 +30,9 @@ Databricks-first project for auditing how CUMTD real-time departure estimates dr
    - This is a confidence model, not an actual-arrival prediction model.
 
 6. **Student-Facing ETA Trust Dashboard**
-   - Notebook: `notebooks/06_eta_trust_dashboard.py`
-   - Turns drift metrics into route trust scores, suggested buffers, stop/platform warnings, and a route-stop heatmap.
+   - dbt marts: `eta_trust_route_scores`, `eta_trust_stop_scores`, and `eta_trust_route_stop_heatmap`.
+   - Notebook: `notebooks/06_eta_trust_dashboard_preview.py`
+   - Databricks owns the polished dashboard layer; the repo produces dashboard-ready Delta tables.
 
 ## Databricks Setup
 
@@ -44,7 +45,7 @@ Recommended job order:
 3. Run dbt from the `dbt/` directory once raw ingestion is populated.
 4. Run `04_verify_pipeline_health.py` to confirm the raw rows, stop names, ETAs, and dbt models are healthy.
 5. Run `03_explore_eta_drift.py` to sanity-check coverage and drift distributions.
-6. Run `06_eta_trust_dashboard.py` for blog/LinkedIn visuals and student-facing recommendations.
+6. Run `06_eta_trust_dashboard_preview.py` to preview the dashboard-ready tables, then build the polished dashboard in Databricks SQL/Lakeview.
 7. Run `05_model_eta_trust_score.py` once you have enough repeated snapshots to train the confidence model.
 
 There is also a Databricks Asset Bundle scaffold in `databricks.yml`. It defines a paused job that runs ingestion and then drift metric computation every five minutes. The default Unity Catalog target is `workspace.cumtd_eta_drift`; set `s3_bucket`, `s3_prefix`, and `stop_ids` for your workspace before enabling the schedule.
@@ -85,7 +86,7 @@ This repo is initialized with `uv`.
 
 ```bash
 uv sync
-uv run python -m py_compile notebooks/01_ingest_departure_snapshots.py notebooks/02_compute_departure_drift_metrics.py notebooks/03_explore_eta_drift.py notebooks/04_verify_pipeline_health.py notebooks/05_model_eta_trust_score.py notebooks/06_eta_trust_dashboard.py notebooks/eta_analysis_utils.py
+uv run python -m py_compile notebooks/01_ingest_departure_snapshots.py notebooks/02_compute_departure_drift_metrics.py notebooks/03_explore_eta_drift.py notebooks/04_verify_pipeline_health.py notebooks/05_model_eta_trust_score.py notebooks/06_eta_trust_dashboard_preview.py notebooks/eta_analysis_utils.py
 ```
 
 The local environment is useful for dependency locking and syntax checks. The notebooks still require a Databricks runtime for `spark`, `dbutils`, Delta tables, and job execution.

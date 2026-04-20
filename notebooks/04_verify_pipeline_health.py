@@ -32,6 +32,9 @@ staging_table = f"{database_name}.stg_departure_snapshots"
 metrics_table = f"{database_name}.departure_drift_metrics"
 stop_summary_table = f"{database_name}.daily_stop_drift_summary"
 route_summary_table = f"{database_name}.daily_route_drift_summary"
+route_scores_table = f"{database_name}.eta_trust_route_scores"
+stop_scores_table = f"{database_name}.eta_trust_stop_scores"
+heatmap_table = f"{database_name}.eta_trust_route_stop_heatmap"
 
 print(f"Verifying pipeline tables in {database_name}")
 
@@ -69,6 +72,9 @@ for table_name in [
     metrics_table,
     stop_summary_table,
     route_summary_table,
+    route_scores_table,
+    stop_scores_table,
+    heatmap_table,
 ]:
     checks.append(
         Row(
@@ -128,6 +134,18 @@ if table_exists(metrics_table):
             details=None if metrics_with_drift > 0 else "Drift stays empty until the same stop/trip appears in multiple snapshots.",
         )
     )
+
+for trust_table in [route_scores_table, stop_scores_table, heatmap_table]:
+    if table_exists(trust_table):
+        trust_rows = scalar(f"select count(*) from {trust_table}")
+        checks.append(
+            Row(
+                check_name=f"dashboard_rows:{trust_table}",
+                status="pass" if trust_rows > 0 else "warn",
+                observed_value=str(trust_rows),
+                details=None if trust_rows > 0 else "Dashboard mart exists but has no rows yet.",
+            )
+        )
 
 checks_df = spark.createDataFrame(checks, check_schema)
 display(checks_df.orderBy(col("status"), col("check_name")))
