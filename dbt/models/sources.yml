@@ -56,5 +56,4 @@ sources:
           - name: status
             tests:
               - accepted_values:
-                  arguments:
-                    values: ['success', 'failed']
+                  values: ['success', 'failed']

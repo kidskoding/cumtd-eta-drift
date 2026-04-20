@@ -69,6 +69,9 @@ display(
         f"""
         select
             route_short_name,
+            route_group_name,
+            hex_color,
+            text_hex_color,
             observed_trip_count,
             eta_trust_score,
             eta_trust_label,

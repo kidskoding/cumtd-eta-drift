@@ -3,7 +3,12 @@
     file_format='delta'
 ) }}
 
-with route_metrics as (
+with route_colors as (
+    select route_short_name, route_group_name, hex_color, text_hex_color
+    from {{ ref('stg_route_colors') }}
+),
+
+route_metrics as (
     select
         route_id,
         route_short_name,
@@ -38,11 +43,24 @@ scored as (
             else 'Add buffer'
         end as student_guidance
     from route_metrics
+),
+
+scored_with_colors as (
+    select
+        s.*,
+        coalesce(rc.route_group_name, s.route_short_name) as route_group_name,
+        coalesce(rc.hex_color, '808285') as hex_color,
+        coalesce(rc.text_hex_color, 'ffffff') as text_hex_color
+    from scored s
+    left join route_colors rc on s.route_short_name = rc.route_short_name
 )
 
 select
     route_id,
     route_short_name,
+    route_group_name,
+    hex_color,
+    text_hex_color,
     observed_trip_count,
     avg_drift_minutes,
     p50_drift_minutes,
@@ -58,4 +76,4 @@ select
     eta_trust_label,
     student_guidance,
     current_timestamp() as score_computed_at
-from scored
+from scored_with_colors
