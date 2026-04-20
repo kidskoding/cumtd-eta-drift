@@ -27,11 +27,12 @@ jobs:
   deploy:
     name: Validate and deploy Databricks bundle
     runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'prod' }}
 
     env:
       DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-      BUNDLE_TARGET: ${{ github.event.inputs.target || 'prod' }}
+      BUNDLE_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'prod' }}
 
     steps:
       - name: Check out repository
