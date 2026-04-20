@@ -27,12 +27,6 @@ resources:
         timezone_id: America/Chicago
         pause_status: PAUSED
       max_concurrent_runs: 1
-      environments:
-        - environment_key: default
-          spec:
-            client: "1"
-            dependencies:
-              - dbt-databricks>=1.10,<2
       tasks:
         - task_key: ingest_departure_snapshots
           notebook_task:
@@ -47,21 +41,17 @@ resources:
         - task_key: compute_departure_drift_metrics
           depends_on:
             - task_key: ingest_departure_snapshots
-          environment_key: default
-          dbt_task:
-            warehouse_id: 05d2ded59afce66c
-            project_directory: dbt
-            commands:
-              - "dbt run --profiles-dir . --vars '{\"catalog\": \"${var.catalog}\", \"raw_schema\": \"${var.schema}\", \"mart_schema\": \"${var.schema}\"}'"
+          notebook_task:
+            notebook_path: notebooks/run_dbt.py
+            base_parameters:
+              dbt_command: "dbt run --profiles-dir . --vars '{\"catalog\": \"${var.catalog}\", \"raw_schema\": \"${var.schema}\", \"mart_schema\": \"${var.schema}\"}'"
         - task_key: test_dbt_models
           depends_on:
             - task_key: compute_departure_drift_metrics
-          environment_key: default
-          dbt_task:
-            warehouse_id: 05d2ded59afce66c
-            project_directory: dbt
-            commands:
-              - "dbt test --profiles-dir . --vars '{\"catalog\": \"${var.catalog}\", \"raw_schema\": \"${var.schema}\", \"mart_schema\": \"${var.schema}\"}'"
+          notebook_task:
+            notebook_path: notebooks/run_dbt.py
+            base_parameters:
+              dbt_command: "dbt test --profiles-dir . --vars '{\"catalog\": \"${var.catalog}\", \"raw_schema\": \"${var.schema}\", \"mart_schema\": \"${var.schema}\"}'"
         - task_key: verify_pipeline_health
           depends_on:
             - task_key: test_dbt_models
