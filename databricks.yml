@@ -49,6 +49,7 @@ resources:
             - task_key: ingest_departure_snapshots
           environment_key: default
           dbt_task:
+            warehouse_id: 05d2ded59afce66c
             project_directory: dbt
             commands:
               - "dbt deps"
@@ -58,6 +59,7 @@ resources:
             - task_key: compute_departure_drift_metrics
           environment_key: default
           dbt_task:
+            warehouse_id: 05d2ded59afce66c
             project_directory: dbt
             commands:
               - "dbt test --vars '{\"catalog\": \"${var.catalog}\", \"raw_schema\": \"${var.schema}\", \"mart_schema\": \"${var.schema}\"}'"
