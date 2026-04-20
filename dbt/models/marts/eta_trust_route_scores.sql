@@ -21,7 +21,10 @@ route_metrics as (
         avg(monotonicity_violation_count) as avg_monotonicity_violation_count,
         avg(case when drift_minutes >= 2 then 1.0 else 0.0 end) as pct_trips_drift_ge_2_min,
         avg(case when drift_minutes >= 5 then 1.0 else 0.0 end) as pct_trips_drift_ge_5_min,
-        avg(case when drift_minutes >= 10 then 1.0 else 0.0 end) as pct_trips_drift_ge_10_min
+        avg(case when drift_minutes >= 10 then 1.0 else 0.0 end) as pct_trips_drift_ge_10_min,
+        avg(net_drift_minutes) as avg_net_drift_minutes,
+        avg(case when net_drift_minutes > 0 then 1.0 else 0.0 end) as pct_trips_ran_late,
+        avg(case when net_drift_minutes < 0 then 1.0 else 0.0 end) as pct_trips_ran_early
     from {{ ref('departure_drift_metrics') }}
     where route_short_name is not null
     group by route_id, route_short_name
@@ -80,5 +83,8 @@ select
     suggested_buffer_minutes,
     eta_trust_label,
     student_guidance,
+    avg_net_drift_minutes,
+    pct_trips_ran_late,
+    pct_trips_ran_early,
     current_timestamp() as score_computed_at
 from scored_with_colors
