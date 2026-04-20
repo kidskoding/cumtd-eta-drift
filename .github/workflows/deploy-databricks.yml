@@ -1,0 +1,47 @@
+name: Deploy Databricks Bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Databricks bundle target to deploy
+        required: true
+        default: prod
+        type: choice
+        options:
+          - dev
+          - prod
+  push:
+    branches:
+      - master
+    paths:
+      - "databricks.yml"
+      - "dbt/**"
+      - "notebooks/**"
+      - ".github/workflows/deploy-databricks.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Validate and deploy Databricks bundle
+    runs-on: ubuntu-latest
+
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      BUNDLE_TARGET: ${{ github.event.inputs.target || 'prod' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Validate bundle
+        run: databricks bundle validate --target "$BUNDLE_TARGET"
+
+      - name: Deploy bundle
+        run: databricks bundle deploy --target "$BUNDLE_TARGET"

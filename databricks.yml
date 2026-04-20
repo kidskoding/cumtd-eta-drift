@@ -23,7 +23,7 @@ resources:
     cumtd_eta_drift_audit:
       name: CUMTD v3 Transit ETA Drift Audit
       schedule:
-        quartz_cron_expression: "0 0/5 * * * ?"
+        quartz_cron_expression: "0 0/30 * * * ?"
         timezone_id: America/Chicago
         pause_status: PAUSED
       max_concurrent_runs: 1
@@ -56,13 +56,23 @@ resources:
             commands:
               - "dbt deps"
               - "dbt run --vars '{\"catalog\": \"${var.catalog}\", \"raw_schema\": \"${var.schema}\", \"mart_schema\": \"${var.schema}\"}'"
+          libraries:
+            - pypi:
+                package: dbt-databricks>=1.10,<2
+        - task_key: test_dbt_models
+          depends_on:
+            - task_key: compute_departure_drift_metrics
+          job_cluster_key: eta_drift_cluster
+          dbt_task:
+            project_directory: dbt
+            commands:
               - "dbt test --vars '{\"catalog\": \"${var.catalog}\", \"raw_schema\": \"${var.schema}\", \"mart_schema\": \"${var.schema}\"}'"
           libraries:
             - pypi:
                 package: dbt-databricks>=1.10,<2
         - task_key: verify_pipeline_health
           depends_on:
-            - task_key: compute_departure_drift_metrics
+            - task_key: test_dbt_models
           job_cluster_key: eta_drift_cluster
           notebook_task:
             notebook_path: notebooks/04_verify_pipeline_health.py

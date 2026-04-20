@@ -48,7 +48,39 @@ Recommended job order:
 6. Run `06_eta_trust_dashboard_preview.py` to preview the dashboard-ready tables, then build the polished dashboard in Databricks SQL/Lakeview.
 7. Run `05_model_eta_trust_score.py` once you have enough repeated snapshots to train the confidence model.
 
-There is also a Databricks Asset Bundle scaffold in `databricks.yml`. It defines a paused job that runs ingestion and then drift metric computation every five minutes. The default Unity Catalog target is `workspace.cumtd_eta_drift`; set `s3_bucket`, `s3_prefix`, and `stop_ids` for your workspace before enabling the schedule.
+There is also a Databricks Asset Bundle scaffold in `databricks.yml`. It defines a paused job that runs ingestion, dbt transformations, dbt tests, and pipeline health checks every 30 minutes. The default Unity Catalog target is `workspace.cumtd_eta_drift`; set `s3_bucket`, `s3_prefix`, and `stop_ids` for your workspace before enabling the schedule.
+
+## Automation
+
+The project separates deployment automation from runtime orchestration:
+
+```text
+GitHub Actions -> deploy Lambda and Databricks job definitions
+EventBridge    -> trigger Lambda API snapshots
+Databricks Job -> ingest S3, run dbt, test dbt, verify tables
+dbt            -> build dashboard-ready Delta marts
+Databricks SQL -> dashboard visuals from mart tables
+```
+
+GitHub Actions workflows:
+
+- `.github/workflows/deploy-lambda.yml`: deploys `lambda/lambda_function.py` to AWS Lambda when Lambda code changes.
+- `.github/workflows/deploy-databricks.yml`: validates and deploys the Databricks Asset Bundle when notebooks, dbt models, or `databricks.yml` change.
+
+Configure these GitHub Actions secrets before deploying the Databricks bundle:
+
+| Secret | Description |
+| --- | --- |
+| `DATABRICKS_HOST` | Databricks workspace URL, for example `https://dbc-...cloud.databricks.com` |
+| `DATABRICKS_TOKEN` | Databricks personal access token or service principal token with bundle/job permissions |
+
+Manual deployment:
+
+```bash
+databricks bundle validate --target prod
+databricks bundle deploy --target prod
+databricks bundle run cumtd_eta_drift_audit --target prod
+```
 
 ## dbt Transformation Layer
 
