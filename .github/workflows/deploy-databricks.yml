@@ -56,14 +56,18 @@ jobs:
       - name: Normalize Databricks host
         run: |
           clean_host="$(printf '%s' "$DATABRICKS_HOST" | tr -d '[:space:]')"
+          clean_host="${clean_host%/}"
 
           case "$clean_host" in
             https://*)
               echo "DATABRICKS_HOST=$clean_host" >> "$GITHUB_ENV"
               ;;
-            *)
-              echo "DATABRICKS_HOST must be a workspace URL that starts with https://"
+            http://*)
+              echo "DATABRICKS_HOST must use https://, not http://"
               exit 1
+              ;;
+            *)
+              echo "DATABRICKS_HOST=https://$clean_host" >> "$GITHUB_ENV"
               ;;
           esac
 
