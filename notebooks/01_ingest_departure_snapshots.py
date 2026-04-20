@@ -493,6 +493,9 @@ route_colors_schema = StructType([
     StructField("text_hex_color", ST(), True),
 ])
 
+# Always ensure the table exists so downstream dbt models never fail on a missing table.
+spark.createDataFrame([], route_colors_schema).write.format("delta").mode("ignore").saveAsTable(route_colors_table)
+
 try:
     color_text_df = spark.read.option("wholetext", True).text(route_colors_s3_path)
     color_json_str = color_text_df.collect()[0].value
@@ -506,4 +509,4 @@ try:
     )
     print(f"Wrote {len(color_data)} route color rows to {route_colors_table}")
 except Exception as exc:
-    print(f"Warning: Could not load route colors from S3: {exc}")
+    print(f"Warning: Could not load route colors from S3 (table exists but may be empty): {exc}")
