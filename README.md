@@ -82,6 +82,13 @@ databricks bundle deploy --target prod
 databricks bundle run cumtd_eta_drift_audit --target prod
 ```
 
+If deployment fails while acquiring `state/deploy.lock`, delete the stale bundle
+folder in the Databricks workspace and rerun the workflow:
+
+```text
+/Workspace/Users/<your-databricks-user>/.bundle/cumtd_eta_drift/prod
+```
+
 ## dbt Transformation Layer
 
 The `dbt/` directory is scaffolded for dbt on Databricks. Ingestion stays in the Databricks Python notebook; dbt starts from the raw Delta tables and owns the clean, intermediate, and mart models.
