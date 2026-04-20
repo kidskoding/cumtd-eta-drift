@@ -1,0 +1,11 @@
+cumtd_eta_drift:
+  target: dev
+  outputs:
+    dev:
+      type: databricks
+      catalog: "{{ env_var('DATABRICKS_CATALOG', 'workspace') }}"
+      schema: "{{ env_var('DATABRICKS_SCHEMA', 'cumtd_eta_drift') }}"
+      host: "{{ env_var('DATABRICKS_HOST', 'example.cloud.databricks.com') }}"
+      http_path: "{{ env_var('DATABRICKS_HTTP_PATH', '/sql/1.0/warehouses/example') }}"
+      token: "{{ env_var('DATABRICKS_TOKEN', 'example') }}"
+      threads: 4
