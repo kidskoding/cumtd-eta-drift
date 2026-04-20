@@ -13,10 +13,7 @@ project_dir = "/Workspace/Users/anirudhkonidala@gmail.com/.databricks_bundles_v2
 result = subprocess.run(
     f"cd {project_dir} && {cmd}",
     shell=True,
-    capture_output=True,
     text=True,
 )
-print(result.stdout)
 if result.returncode != 0:
-    print(result.stderr)
     raise Exception(f"dbt command failed: {cmd}")
