@@ -15,6 +15,9 @@ clean-targets:
   - target
   - dbt_packages
 
+on-run-start:
+  - "USE CATALOG workspace"
+
 vars:
   catalog: workspace
   raw_schema: cumtd_eta_drift
