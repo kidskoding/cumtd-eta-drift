@@ -331,15 +331,9 @@ def lambda_handler(event, context):
 
     def _poll_stop(stop_id: str) -> dict:
         try:
-            stop_metadata = _extract_stop_metadata(_fetch_stop_metadata(stop_id))
             payload = _fetch_departures(stop_id)
-            s3_path = _write_to_s3(stop_id, stop_metadata, payload, ts)
-            return {
-                "stop_id": stop_id,
-                "stop_name": stop_metadata.get("stop_group_name"),
-                "status": "success",
-                "s3_path": s3_path,
-            }
+            s3_path = _write_to_s3(stop_id, {}, payload, ts)
+            return {"stop_id": stop_id, "status": "success", "s3_path": s3_path}
         except Exception as exc:
             return {"stop_id": stop_id, "status": "failed", "error": str(exc)}
 
