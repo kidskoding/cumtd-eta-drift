@@ -2,6 +2,8 @@
 import os
 import subprocess
 
+subprocess.run(["pip", "install", "dbt-databricks>=1.10,<2", "-q"], check=True)
+
 token = dbutils.secrets.get("cumtd-eta-drift", "databricks-token")
 os.environ["DATABRICKS_TOKEN"] = token
 
