@@ -40,6 +40,18 @@ jobs:
       - name: Set up Databricks CLI
         uses: databricks/setup-cli@main
 
+      - name: Check Databricks credentials
+        run: |
+          if [ -z "$DATABRICKS_HOST" ]; then
+            echo "Missing GitHub Actions secret: DATABRICKS_HOST"
+            exit 1
+          fi
+
+          if [ -z "$DATABRICKS_TOKEN" ]; then
+            echo "Missing GitHub Actions secret: DATABRICKS_TOKEN"
+            exit 1
+          fi
+
       - name: Validate bundle
         run: databricks bundle validate --target "$BUNDLE_TARGET"
 
