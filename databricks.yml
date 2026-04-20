@@ -52,7 +52,6 @@ resources:
             warehouse_id: 05d2ded59afce66c
             project_directory: dbt
             commands:
-              - "dbt deps"
               - "dbt run --profiles-dir . --vars '{\"catalog\": \"${var.catalog}\", \"raw_schema\": \"${var.schema}\", \"mart_schema\": \"${var.schema}\"}'"
         - task_key: test_dbt_models
           depends_on:

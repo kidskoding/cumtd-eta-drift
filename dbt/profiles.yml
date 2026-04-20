@@ -7,5 +7,4 @@ cumtd_eta_drift:
       schema: cumtd_eta_drift
       host: dbc-668159b2-53e5.cloud.databricks.com
       http_path: /sql/1.0/warehouses/05d2ded59afce66c
-      token: "{{ env_var('DATABRICKS_TOKEN', '') }}"
       threads: 4
