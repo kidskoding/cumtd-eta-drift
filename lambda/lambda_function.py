@@ -49,7 +49,10 @@ MAX_STOPS = int(os.environ.get("MAX_STOPS", "150"))
 # Parallel workers for departure fetching
 MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "10"))
 
-http = urllib3.PoolManager(timeout=urllib3.Timeout(total=REQUEST_TIMEOUT))
+http = urllib3.PoolManager(
+    maxsize=MAX_WORKERS * 2,
+    timeout=urllib3.Timeout(total=REQUEST_TIMEOUT),
+)
 s3 = boto3.client("s3")
 
 # Cache discovered stops across warm Lambda invocations
