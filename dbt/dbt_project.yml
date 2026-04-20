@@ -23,6 +23,11 @@ vars:
   raw_schema: cumtd_eta_drift
   mart_schema: cumtd_eta_drift
 
+seeds:
+  cumtd_eta_drift:
+    +file_format: delta
+    +schema: "{{ var('raw_schema') }}"
+
 models:
   cumtd_eta_drift:
     +file_format: delta
