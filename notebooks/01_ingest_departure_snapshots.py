@@ -48,7 +48,9 @@ stop_name_override_text = dbutils.widgets.get("stop_name_overrides").strip()
 database_name = f"{catalog}.{schema_name}" if catalog else schema_name
 raw_table = f"{database_name}.raw_departure_snapshots"
 audit_table = f"{database_name}.departure_ingestion_audit"
+route_colors_table = f"{database_name}.route_colors"
 s3_path = f"s3://{s3_bucket}/{s3_prefix}"
+route_colors_s3_path = f"s3://{s3_bucket}/route-colors/route_colors.json"
 
 print(f"Reading snapshots from: {s3_path}")
 print(f"Writing to: {raw_table}")
@@ -479,3 +481,29 @@ if rows:
 print(f"Wrote {len(rows)} rows to {raw_table}")
 print(f"Wrote {len(audit_rows)} audit rows to {audit_table}")
 print(f"run_id={run_id}")
+
+# COMMAND ----------
+
+from pyspark.sql.types import StructType, StructField, StringType as ST
+
+route_colors_schema = StructType([
+    StructField("route_short_name", ST(), False),
+    StructField("route_group_name", ST(), True),
+    StructField("hex_color", ST(), True),
+    StructField("text_hex_color", ST(), True),
+])
+
+try:
+    color_text_df = spark.read.option("wholetext", True).text(route_colors_s3_path)
+    color_json_str = color_text_df.collect()[0].value
+    color_data = json.loads(color_json_str)
+    color_df = spark.createDataFrame(color_data, route_colors_schema)
+    (
+        color_df.write.format("delta")
+        .mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(route_colors_table)
+    )
+    print(f"Wrote {len(color_data)} route color rows to {route_colors_table}")
+except Exception as exc:
+    print(f"Warning: Could not load route colors from S3: {exc}")

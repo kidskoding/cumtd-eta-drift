@@ -263,6 +263,40 @@ def _get_str(obj: dict, keys: list) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Route colors
+# ---------------------------------------------------------------------------
+ROUTE_COLORS_KEY = "route-colors/route_colors.json"
+
+def _fetch_route_colors() -> List[Dict[str, str]]:
+    base = API_BASE_URL.rstrip("/")
+    data = _request_json(f"{base}/routes/groups")
+    groups = data.get("result") or data.get("Result") or []
+    rows = []
+    for group in groups:
+        color = group.get("color") or "808285"
+        text_color = group.get("textColor") or "ffffff"
+        group_name = group.get("routeGroupName") or ""
+        for route in group.get("routes") or []:
+            for gtfs_name in route.get("gtfsRoutes") or []:
+                rows.append({
+                    "route_short_name": gtfs_name,
+                    "route_group_name": group_name,
+                    "hex_color": color,
+                    "text_hex_color": text_color,
+                })
+    return rows
+
+
+def _write_route_colors_to_s3(rows: List[Dict[str, str]]) -> None:
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=ROUTE_COLORS_KEY,
+        Body=json.dumps(rows, default=str),
+        ContentType="application/json",
+    )
+
+
+# ---------------------------------------------------------------------------
 # S3 writer
 # ---------------------------------------------------------------------------
 def _write_to_s3(stop_id: str, stop_metadata: Dict[str, Any],
@@ -317,6 +351,13 @@ def lambda_handler(event, context):
         }
 
     print(f"[lambda] Polling {len(all_stop_ids)} stops: {all_stop_ids}")
+
+    try:
+        color_rows = _fetch_route_colors()
+        _write_route_colors_to_s3(color_rows)
+        print(f"[lambda] Wrote {len(color_rows)} route color rows to s3://{S3_BUCKET}/{ROUTE_COLORS_KEY}")
+    except Exception as exc:
+        print(f"[lambda] Warning: Could not refresh route colors: {exc}")
 
     for stop_id in all_stop_ids:
         try:
